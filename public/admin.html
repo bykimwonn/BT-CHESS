@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin - BetChess ZW</title>
+<style>
+:root { --bg:#161512; --card:#272522; --border:#3d3a36; --green:#81b64c; --text:#e8e7e6; --muted:#a39e99; }
+body { background: var(--bg); color: var(--text); font-family: Inter, sans-serif; padding:20px; }
+.card { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; }
+.input { background:#262421; border:1px solid var(--border); border-radius:8px; padding:10px; color:var(--text); width:100%; }
+.btn { border:none; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; }
+.btn-green { background: var(--green); color:#fff; }
+.btn-outline { background:transparent; border:1px solid var(--border); color:var(--text); }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+.stat { background:#3c3934; border-radius:10px; padding:12px; }
+.stat-label { font-size:11px; color:var(--muted); } .stat-value { font-size:20px; font-weight:800; margin-top:4px; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th, td { padding:8px; text-align:left; border-bottom:1px solid var(--border); }
+th { color:var(--muted); font-size:11px; text-transform:uppercase; }
+</style>
+</head>
+<body>
+<h1>♔ BetChess ZW - Admin Dashboard</h1>
+<p style="color:var(--muted)">Manage users, bets, jackpot, withdrawals, EcoCash integration</p>
+
+<div id="loginBox" class="card" style="max-width:400px">
+<h3>🔒 Admin Login</h3>
+<input class="input" id="adminPw" type="password" placeholder="Enter admin password (default: admin123ZW)">
+<button class="btn btn-green" style="margin-top:10px;width:100%" onclick="login()">Login</button>
+<div style="font-size:11px;color:var(--muted);margin-top:8px">Default: admin123ZW - Change via ADMIN_PASSWORD env var</div>
+</div>
+
+<div id="adminContent" style="display:none">
+<div class="grid">
+<div class="stat"><div class="stat-label">Total Users</div><div class="stat-value" id="statUsers">0</div></div>
+<div class="stat"><div class="stat-label">Active Games</div><div class="stat-value" id="statActive">0</div></div>
+<div class="stat"><div class="stat-label">Jackpot Pool</div><div class="stat-value" id="statJackpot" style="color:var(--green)">$0</div></div>
+<div class="stat"><div class="stat-label">Total Bets</div><div class="stat-value" id="statBets">$0</div></div>
+<div class="stat"><div class="stat-label">Total Payouts</div><div class="stat-value" id="statPayouts">$0</div></div>
+<div class="stat"><div class="stat-label">Platform Fees</div><div class="stat-value" id="statFees">$0</div></div>
+</div>
+
+<div class="card">
+<h3>🎰 Jackpot Control</h3>
+<div style="display:flex;gap:8px;margin-top:10px">
+<input class="input" id="jackpotAmount" type="number" value="100" style="max-width:120px">
+<button class="btn btn-green" onclick="jackpotAction('add')">Add to Pool</button>
+<button class="btn btn-outline" onclick="jackpotAction('set')">Set Amount</button>
+<button class="btn btn-outline" onclick="jackpotAction('reset')">Reset to $1250</button>
+</div>
+</div>
+
+<div class="card">
+<h3>📱 EcoCash Integration Status</h3>
+<div id="ecocashStatus" style="font-size:12px;line-height:1.6"></div>
+<div style="background:#1e1c1a;border-radius:8px;padding:12px;margin-top:10px;font-size:11px;font-family:monospace">
+<b>To go LIVE with real EcoCash:</b><br>
+1. Get merchant code from Econet Cassava<br>
+2. Set env: ECOCASH_MERCHANT_CODE, ECOCASH_API_KEY, BASE_URL<br>
+3. Endpoint: POST /api/ecocash/deposit {phone, amount, userId}<br>
+4. EcoCash will call POST /api/ecocash/callback {reference, status, amount}<br>
+5. Current mode: <span id="ecoMode">MOCK</span> - auto-completes deposits<br><br>
+Example real call:<br>
+curl -X POST https://yourapp.com/api/ecocash/deposit -H "Content-Type:application/json" -d '{"phone":"0771234567","amount":5,"userId":"abc"}'
+</div>
+</div>
+
+<div class="card">
+<h3>💸 Pending Withdrawals (Need Approval)</h3>
+<div id="withdrawalsList"></div>
+</div>
+
+<div class="card">
+<h3>👥 Users (Top 50)</h3>
+<div style="overflow-x:auto"><table><thead><tr><th>User</th><th>Phone</th><th>Balance</th><th>Rating</th><th>Earned</th><th>Puzzles</th><th>Created</th></tr></thead><tbody id="usersTable"></tbody></table></div>
+</div>
+
+<div class="card">
+<h3>🎮 Live Games</h3>
+<div id="gamesList"></div>
+</div>
+
+<div class="card">
+<h3>💳 Recent Transactions (Global)</h3>
+<div id="txList"></div>
+</div>
+
+<div class="card">
+<h3>📊 Bet Queues (Matchmaking)</h3>
+<div id="queuesList"></div>
+</div>
+
+<button class="btn btn-outline" onclick="loadAdmin()">🔄 Refresh</button>
+<a href="/" class="btn btn-outline" style="margin-left:8px">← Back to Game</a>
+</div>
+
+<script>
+let adminPw = '';
+function login(){
+  adminPw = document.getElementById('adminPw').value;
+  loadAdmin();
+}
+async function loadAdmin(){
+  const pw = adminPw || document.getElementById('adminPw').value;
+  try {
+    const res = await fetch(`/api/admin/data?password=${encodeURIComponent(pw)}`);
+    if (!res.ok) throw new Error('Unauthorized');
+    const data = await res.json();
+    document.getElementById('loginBox').style.display='none';
+    document.getElementById('adminContent').style.display='block';
+    adminPw = pw;
+    
+    document.getElementById('statUsers').textContent = data.usersCount;
+    document.getElementById('statActive').textContent = data.activeGames;
+    document.getElementById('statJackpot').textContent = `$${data.jackpotPool.toFixed(2)}`;
+    document.getElementById('statBets').textContent = `$${(data.stats.totalBets||0).toFixed(2)}`;
+    document.getElementById('statPayouts').textContent = `$${(data.stats.totalPayouts||0).toFixed(2)}`;
+    document.getElementById('statFees').textContent = `$${(data.stats.totalFees||0).toFixed(2)}`;
+    
+    document.getElementById('ecocashStatus').innerHTML = `Configured: ${data.ecocashStatus.configured ? '✅ LIVE' : '⚠️ MOCK (set env vars to go live)'}<br>Mock mode: ${data.ecocashStatus.mock ? 'Yes - auto approves' : 'No - real API'}`;
+    document.getElementById('ecoMode').textContent = data.ecocashStatus.mock ? 'MOCK - For demo' : 'LIVE - Real money';
+    
+    document.getElementById('usersTable').innerHTML = data.users.map(u=> `<tr><td><b>${u.username}</b><br><small>${u.id.substring(0,8)}</small></td><td>${u.phone||''} ${u.phoneVerified?'✅':''}</td><td style="color:var(--green);font-weight:700">$${u.balance.toFixed(2)}</td><td>${u.rating||800}</td><td>$${(u.stats?.earned||0).toFixed(2)}</td><td>${u.stats?.puzzlesSolved||0}</td><td>${new Date(u.createdAt).toLocaleDateString()}</td></tr>`).join('');
+    
+    document.getElementById('gamesList').innerHTML = data.games.map(g=> `<div style="background:#3c3934;border-radius:8px;padding:8px;margin-bottom:6px;display:flex;justify-content:space-between"><span><b>${g.id}</b> ${g.type} ${g.bet?'$'+g.bet:''} ${g.status}</span><span>${g.white?.username||'?'} vs ${g.black?.username||'?'} ${g.clocks?`W:${g.clocks.w}s B:${g.clocks.b}s`:''}</span></div>`).join('') || 'No games';
+    
+    document.getElementById('txList').innerHTML = data.transactions.map(t=> `<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid #3d3a36"><span>${t.type} ${t.username} $${t.amount.toFixed(2)} ${t.details}</span><span style="color:#a39e99">${new Date(t.timestamp).toLocaleTimeString()}</span></div>`).join('');
+    
+    document.getElementById('queuesList').innerHTML = Object.entries(data.betQueues).map(([bet,count])=> `<div>Bet $${bet}: ${count} waiting</div>`).join('') || 'No queues';
+    
+    document.getElementById('withdrawalsList').innerHTML = data.pendingWithdrawals.map(w=> `<div style="background:#3c3934;border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><div><b>${w.username}</b> ${w.method} $${w.amount} → ${w.accountDetails}<br><small>${new Date(w.createdAt).toLocaleString()} - ${w.status}</small></div><div>${w.status==='pending'?`<button class="btn btn-green" onclick="approveWithdrawal('${w.id}')">Approve & Pay via EcoCash</button>`: w.status}</div></div>`).join('') || 'No pending';
+    
+  } catch(e) {
+    alert('Login failed: ' + e.message);
+  }
+}
+async function jackpotAction(action){
+  const amount = document.getElementById('jackpotAmount').value;
+  const res = await fetch('/api/admin/jackpot', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: adminPw, action, amount }) });
+  const data = await res.json();
+  if (data.success) { alert(`Jackpot now $${data.pool.toFixed(2)}`); loadAdmin(); }
+}
+async function approveWithdrawal(id){
+  const res = await fetch('/api/admin/withdraw/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: adminPw, withdrawalId: id }) });
+  const data = await res.json();
+  if (data.success) { alert('Approved & EcoCash B2C triggered!'); loadAdmin(); }
+}
+</script>
+</body>
+</html>

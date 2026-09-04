@@ -12,6 +12,15 @@ const fs = require('fs');
 const { EngineService, PRIORITY } = require('./lib/engine');
 const { DIFFICULTY_PROFILES, publicProfiles, getProfile } = require('./lib/engine/strength');
 const { PaymentService } = require('./lib/payments');
+const rating = require('./lib/rating');
+
+// Real-world knobs (override via environment).
+const WELCOME_BONUS = parseFloat(process.env.WELCOME_BONUS || '0'); // free starting credit, 0 in production
+const EXPOSE_OTP = process.env.NODE_ENV !== 'production'; // only echo OTP codes outside production
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123ZW';
+if (!process.env.ADMIN_PASSWORD) {
+  console.warn('⚠️  ADMIN_PASSWORD is not set — using the built-in development password. Set ADMIN_PASSWORD before going live.');
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -72,7 +81,6 @@ const gameClocks = new Map(); // gameId -> interval
 const PLATFORM_FEE = 0.10;
 const MIN_BET = 0.50;
 const JACKPOT_CONTRIBUTION = 0.02;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123ZW';
 
 const DIFFICULTY_CONFIG = DIFFICULTY_PROFILES;
 
@@ -100,22 +108,45 @@ function getUser(userId) {
     const newUser = {
       id: userId,
       username: `Player_${userId.substring(0,4)}`,
-      balance: 12.50,
+      balance: WELCOME_BONUS,
       phone: '',
       phoneVerified: false,
       transactions: [],
-      stats: { wins:0, losses:0, draws:0, engineWins:0, freeGames:0, earned:0, puzzlesSolved:0, pvpWins:0, jackpotWins:0, totalBets:0, rating: 800 + Math.floor(Math.random()*400) },
-      rating: 800 + Math.floor(Math.random()*400),
+      stats: {
+        wins: 0, losses: 0, draws: 0,
+        engineWins: 0, pvpWins: 0, freeGames: 0,
+        earned: 0, highestWin: 0, totalBets: 0,
+        puzzlesSolved: 0, puzzleRating: rating.START_RATING,
+        jackpotWins: 0,
+        ratedGames: 0,
+      },
+      rating: rating.START_RATING,
       createdAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString()
+      lastLogin: new Date().toISOString(),
     };
     users.set(userId, newUser);
     usersData[userId] = newUser;
-    addTransaction(userId, 'deposit', 12.50, 'completed', 'Welcome bonus - $12.50 free to start!');
+    if (WELCOME_BONUS > 0) {
+      addTransaction(userId, 'deposit', WELCOME_BONUS, 'completed', `Welcome credit ($${WELCOME_BONUS.toFixed(2)})`);
+    }
     markDirty();
     return newUser;
   }
-  return users.get(userId);
+  return migrateUser(users.get(userId));
+}
+
+/** Backfill fields added after a user's first save so old accounts keep working. */
+function migrateUser(user) {
+  if (!user) return user;
+  user.stats = user.stats || {};
+  if (user.rating == null) user.rating = rating.START_RATING;
+  if (user.stats.rating == null) user.stats.rating = user.rating;
+  if (user.stats.ratedGames == null) user.stats.ratedGames = 0;
+  if (user.stats.puzzleRating == null) user.stats.puzzleRating = rating.START_RATING;
+  ['wins', 'losses', 'draws', 'engineWins', 'pvpWins', 'earned', 'highestWin', 'puzzlesSolved', 'jackpotWins'].forEach((k) => {
+    if (user.stats[k] == null) user.stats[k] = 0;
+  });
+  return user;
 }
 
 function getUserByPhone(phone) {
@@ -147,19 +178,62 @@ function addTransaction(userId, type, amount, status, details) {
 }
 
 function updateLeaderboard(userId) {
-  const user = getUser(userId);
+  const user = migrateUser(getUser(userId));
   let entry = leaderboard.find(l => l.userId === userId);
   if (!entry) {
-    entry = { userId, username: user.username, winsVsGM: 0, earnings: 0, highestWin: 0, lastWin: null, rating: user.rating||800, phone: user.phone };
+    entry = { userId, username: user.username, winsVsGM: 0, earnings: 0, highestWin: 0, lastWin: null, rating: user.rating, phone: user.phone, wins: 0, losses: 0, draws: 0, ratedGames: 0 };
     leaderboard.push(entry);
   }
   entry.username = user.username;
-  entry.earnings = user.stats.earned||0;
-  entry.rating = user.rating||800;
-  entry.phone = user.phone||'';
-  leaderboard.sort((a,b)=> b.earnings - a.earnings);
-  if (leaderboard.length > 100) leaderboard = leaderboard.slice(0,100);
+  entry.earnings = user.stats.earned || 0;
+  entry.highestWin = user.stats.highestWin || 0;
+  entry.rating = user.rating;
+  entry.wins = user.stats.wins || 0;
+  entry.losses = user.stats.losses || 0;
+  entry.draws = user.stats.draws || 0;
+  entry.ratedGames = user.stats.ratedGames || 0;
+  entry.provisional = rating.isProvisional(user.stats.ratedGames);
+  entry.phone = user.phone || '';
+  // Rating-first board; earnings break ties.
+  leaderboard.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.earnings || 0) - (a.earnings || 0));
+  if (leaderboard.length > 100) leaderboard = leaderboard.slice(0, 100);
   markDirty();
+}
+
+/** Persist a human-vs-engine rating change and notify the player. */
+function applyEngineRating(userId, engineElo, result, socket) {
+  const user = migrateUser(getUser(userId));
+  const before = user.rating;
+  const res = rating.vsEngine({ rating: before, ratedGames: user.stats.ratedGames }, engineElo, result);
+  user.rating = res.rating;
+  user.stats.rating = res.rating;
+  user.stats.ratedGames = (user.stats.ratedGames || 0) + 1;
+  const sock = socket || (userId ? io.to(userId) : null);
+  if (sock) sock.emit('ratingUpdate', { rating: res.rating, delta: res.delta, ratedGames: user.stats.ratedGames });
+  updateLeaderboard(userId);
+  markDirty();
+  return res;
+}
+
+/** Persist a human-vs-human rating change after a decisive/drawn PvP result. */
+function applyPvpRating(whiteId, blackId, resultForWhite) {
+  const w = migrateUser(getUser(whiteId));
+  const b = migrateUser(getUser(blackId));
+  const res = rating.updateElo(
+    { rating: w.rating, ratedGames: w.stats.ratedGames },
+    { rating: b.rating, ratedGames: b.stats.ratedGames },
+    resultForWhite,
+  );
+  w.rating = res.a.rating; b.rating = res.b.rating;
+  w.stats.rating = w.rating; b.stats.rating = b.rating;
+  w.stats.ratedGames = (w.stats.ratedGames || 0) + 1;
+  b.stats.ratedGames = (b.stats.ratedGames || 0) + 1;
+  io.to(whiteId).emit('ratingUpdate', { rating: w.rating, delta: res.a.delta, ratedGames: w.stats.ratedGames });
+  io.to(blackId).emit('ratingUpdate', { rating: b.rating, delta: res.b.delta, ratedGames: b.stats.ratedGames });
+  updateLeaderboard(whiteId);
+  updateLeaderboard(blackId);
+  markDirty();
+  return res;
 }
 
 // ========== 6. PAYMENTS (EcoCash + InnBucks + OneMoney + Bank + Agent) ==========
@@ -288,18 +362,16 @@ function handleEngineOver(game, userId, sock){
         }
         if (game.difficulty==='grandmaster'){
           payout+=10;
-          user.rating+=50;
           let entry=leaderboard.find(l=>l.userId===userId);
           if (!entry){ entry={ userId, username:user.username, winsVsGM:0, earnings:0, highestWin:0, lastWin:null, rating:user.rating }; leaderboard.push(entry); }
-          entry.winsVsGM++;
+          entry.winsVsGM=(entry.winsVsGM||0)+1;
           entry.lastWin=new Date().toISOString();
-          updateLeaderboard(userId);
-          io.emit('leaderboardUpdate', { leaderboard:leaderboard.slice(0,10) });
         }
         user.balance+=payout;
         statsData.totalPayouts+=payout; statsData.totalFees+=gross*PLATFORM_FEE;
         user.stats.wins++; user.stats.engineWins++; user.stats.earned+=payout;
         user.stats.highestWin=Math.max(user.stats.highestWin||0, payout);
+        applyEngineRating(userId, game.difficultyConfig.elo, 'win', sock);
         addTransaction(userId, 'win', payout, 'completed', `Beat Stockfish ${game.difficultyConfig.label} Won $${payout.toFixed(2)} (${game.difficultyConfig.multiplier}x)`);
         totalPayouts+=payout;
       } else {
@@ -314,6 +386,8 @@ function handleEngineOver(game, userId, sock){
         io.emit('jackpotUpdate', { pool:jackpotPool });
         addTransaction(userId, 'loss', 0, 'completed', `Lost $${game.bet} vs ${game.difficultyConfig.label}. ${(game.bet*JACKPOT_CONTRIBUTION).toFixed(2)} to jackpot`);
       }
+      // Free practice games are rated too (no stake), but keep money games rated regardless.
+      applyEngineRating(userId, game.difficultyConfig.elo, 'loss', sock);
       resultText=`Stockfish ${game.difficultyConfig.label} checkmates you`;
     }
   } else if (isDraw){
@@ -323,6 +397,7 @@ function handleEngineOver(game, userId, sock){
       addTransaction(userId, 'refund', game.bet, 'completed', `Draw vs ${game.difficultyConfig.label} refund`);
     }
     user.stats.draws++;
+    applyEngineRating(userId, game.difficultyConfig.elo, 'draw', sock);
   }
   game.status='finished'; game.result=resultText; game.winner=outcome==='win'?game.playerColor:outcome==='loss'?game.engineColor:'draw';
   sock.emit('balanceUpdate', { balance:user.balance });
@@ -365,7 +440,7 @@ function startClock(game) {
 
     const turn = game.chessInstance ? game.chessInstance.turn() : game.turn;
     // For engine games, only tick player's clock when it's their turn
-    if (game.type === 'engine' || game.type === 'llm') {
+    if (game.type === 'engine') {
       if (game.turn === game.playerColor) {
         game.clocks[turn] = Math.max(0, game.clocks[turn] - elapsed);
         io.to(game.id).emit('clockUpdate', { clocks: { w: Math.ceil(game.clocks.w/1000), b: Math.ceil(game.clocks.b/1000) }, turn });
@@ -382,6 +457,7 @@ function startClock(game) {
       }
     } else {
       // PvP - tick whoever's turn
+      if (game.type === 'pvp_friend' && (!game.black || game.status !== 'playing')) return;
       if (game.clocks[turn] !== undefined) {
         game.clocks[turn] = Math.max(0, game.clocks[turn] - elapsed);
         io.to(game.id).emit('clockUpdate', { clocks: { w: Math.ceil(game.clocks.w/1000), b: Math.ceil(game.clocks.b/1000) }, turn });
@@ -407,13 +483,14 @@ function stopClock(gameId) {
 
 function handleFlag(game, flaggedColor) {
   if (game.status !== 'playing') return;
-  game.status = 'finished';
   const winnerColor = flaggedColor === 'w' ? 'b' : 'w';
-  game.winner = winnerColor;
-  game.result = `${flaggedColor==='w'?'White':'Black'} flagged - ${winnerColor==='w'?'White':'Black'} wins on time`;
+  const resultText = `${flaggedColor==='w'?'White':'Black'} flagged on time - ${winnerColor==='w'?'White':'Black'} wins`;
 
-  if (game.type === 'engine' || game.type === 'llm') {
-    const userId = game.white.id !== 'stockfish' && game.white.id !== 'llm' ? game.white.id : game.black.id;
+  if (game.type === 'engine') {
+    game.status = 'finished';
+    game.winner = winnerColor;
+    game.result = resultText;
+    const userId = game.white.id !== 'stockfish' ? game.white.id : game.black.id;
     const user = getUser(userId);
     const playerColor = game.playerColor;
     const playerFlagged = flaggedColor === playerColor;
@@ -422,37 +499,35 @@ function handleFlag(game, flaggedColor) {
       user.stats.losses++;
       if (!game.isFree) {
         jackpotPool += game.bet * JACKPOT_CONTRIBUTION;
-        addTransaction(userId, 'loss', 0, 'completed', `Flagged vs ${game.difficultyConfig?.label||game.llmConfig?.model||'AI'} - Lost $${game.bet} on time`);
+        addTransaction(userId, 'loss', 0, 'completed', `Flagged vs ${game.difficultyConfig?.label||'engine'} - Lost $${game.bet} on time`);
         io.emit('jackpotUpdate', { pool: jackpotPool });
       }
+      const cfg = game.difficultyConfig || { elo: 1500 };
+      applyEngineRating(userId, cfg.elo || 1500, 'loss', io.to(userId));
       io.to(game.id).emit('engineGameFinal', { game: sanitizeGame(game), result: game.result, outcome: 'loss', payout: 0 });
       io.to(userId).emit('balanceUpdate', { balance: user.balance });
     } else {
       // Engine flagged? Unlikely, but player wins
       const cfg = game.difficultyConfig;
-      if (cfg && !game.isFree) {
-        const gross = game.bet * cfg.multiplier;
-        const payout = gross * (1-PLATFORM_FEE);
-        user.balance += payout;
+      if (cfg) {
+        let payout = 0;
+        if (!game.isFree) {
+          const gross = game.bet * cfg.multiplier;
+          payout = gross * (1-PLATFORM_FEE);
+          user.balance += payout;
+          user.stats.earned += payout;
+          addTransaction(userId, 'win', payout, 'completed', `Opponent flagged - Won $${payout.toFixed(2)} vs ${cfg.label}`);
+          io.to(userId).emit('balanceUpdate', { balance: user.balance });
+        }
         user.stats.wins++;
-        user.stats.earned += payout;
-        addTransaction(userId, 'win', payout, 'completed', `Opponent flagged - Won $${payout.toFixed(2)} vs ${cfg.label}`);
-        io.to(userId).emit('balanceUpdate', { balance: user.balance });
+        applyEngineRating(userId, cfg.elo || 1500, 'win', io.to(userId));
         io.to(game.id).emit('engineGameFinal', { game: sanitizeGame(game), result: game.result, outcome: 'win', payout });
       }
     }
-  } else if (game.type === 'pvp_bet') {
-    const winnerId = flaggedColor==='w' ? game.black.id : game.white.id;
-    const winner = getUser(winnerId);
-    const gross = game.escrow;
-    const fee = gross * PLATFORM_FEE;
-    const payout = gross - fee;
-    winner.balance += payout;
-    winner.stats.pvpWins++; winner.stats.wins++; winner.stats.earned += payout;
-    addTransaction(winnerId, 'win', payout, 'completed', `Won on time PvP ${game.id} $${payout.toFixed(2)}`);
-    io.to(winnerId).emit('balanceUpdate', { balance: winner.balance });
-    io.to(game.id).emit('gameOverPvp', { game: sanitizeGame(game) });
-    updateLeaderboard(winnerId);
+  } else if (game.type === 'pvp_bet' || game.type === 'pvp_friend') {
+    const winnerColor = flaggedColor === 'w' ? 'b' : 'w';
+    settlePvp(game, winnerColor, resultText);
+    return; // settlePvp stops the clock and marks dirty
   }
   stopClock(game.id);
   markDirty();
@@ -652,36 +727,10 @@ app.post('/api/admin/withdraw/approve', (req,res)=>{
   res.json({ success:true, withdrawal: wd });
 });
 
-// LLM proxy
-app.post('/api/llm/move', async (req,res)=>{
-  const { fen, legalMoves, provider, model, apiKey, playerColor, history } = req.body;
-  if (!fen) return res.status(400).json({ error: 'FEN required' });
-  if (!apiKey) {
-    const chess = new Chess(fen);
-    const moves = legalMoves || chess.moves();
-    let chosen = moves[Math.floor(Math.random()*moves.length)];
-    if (typeof chosen==='object') chosen = chosen.from+chosen.to+(chosen.promotion||'');
-    const commentary = `Position looks sharp. I'm counting ${moves.length} options, targeting weak squares. My Stockfish eval leans slightly positive.`;
-    return res.json({ commentary, move: chosen||'e2e4', provider:'fallback', fallback:true });
-  }
-  try {
-    const systemPrompt = `You are Grandmaster chess AI. FEN: ${fen} You are ${playerColor||'white'}. Legal: ${JSON.stringify(legalMoves||[])} History: ${history||''} Output ONLY JSON {"commentary":"reasoning","move":"uci"}`;
-    let move=null, comm='';
-    if (provider==='openai' || provider==='groq' || provider==='openai-compatible') {
-      const url = provider==='groq'?'https://api.groq.com/openai/v1/chat/completions':'https://api.openai.com/v1/chat/completions';
-      const resp=await fetch(url,{ method:'POST', headers:{ 'Authorization':`Bearer ${apiKey}`, 'Content-Type':'application/json' }, body: JSON.stringify({ model: model||'gpt-4o-mini', messages:[{role:'system',content:systemPrompt},{role:'user',content:`FEN:${fen} Legal:${(legalMoves||[]).join(',')}`}], temperature:0.7, max_tokens:250 }) });
-      const data=await resp.json();
-      const content=data.choices?.[0]?.message?.content||'';
-      const m=content.match(/\{[\s\S]*\}/); if(m){ try{const obj=JSON.parse(m[0]); comm=obj.commentary; move=obj.move;}catch{}}
-      if(!move){ const u=content.match(/[a-h][1-8][a-h][1-8][qrbn]?/); move=u?u[0]:null; comm=content.slice(0,180); }
-    } else {
-      // fallback
-      const chess=new Chess(fen); const ms=legalMoves||chess.moves(); let ch=ms[Math.floor(Math.random()*ms.length)]; if(typeof ch==='object') ch=ch.from+ch.to+(ch.promotion||''); move=ch; comm='Strategic move';
-    }
-    if(!move) throw new Error('No move');
-    res.json({ commentary:comm, move, provider, model });
-  } catch(e){ console.error('LLM err',e); res.status(500).json({ error:e.message }); }
-});
+// The LLM Arena experiment shipped in testing has been retired for the live
+// product; computer opponents are the rated Stockfish ladder only. Any stale
+// client calling the old endpoint gets a clear 410 instead of a demo response.
+app.post('/api/llm/move', (_req,res)=> res.status(410).json({ error:'LLM Arena has been retired - play the rated Stockfish ladder instead.' }));
 
 // ========== SOCKET LOGIC ==========
 io.on('connection', (socket)=>{
@@ -696,13 +745,18 @@ io.on('connection', (socket)=>{
     }
     socketToUser.set(socket.id, uid);
     socket.join(uid);
-    const user = getUser(uid);
+    const user = migrateUser(getUser(uid));
     if (username) user.username=username;
     if (phone) user.phone=phone;
     user.lastLogin=new Date().toISOString();
     markDirty();
     socket.emit('registered', { userId: uid, user, difficultyConfig: publicProfiles(), jackpotPool, leaderboard: leaderboard.slice(0,10), engine: engine.status(), payments: payments.status() });
     socket.emit('jackpotUpdate', { pool: jackpotPool });
+    // Make sure this socket sees open friend lobbies immediately.
+    const open=Array.from(games.values())
+      .filter(g=> g.type==='pvp_friend' && g.status==='waiting')
+      .map(g=>({ id:g.id, host:g.white?.username||g.black?.username||'Player', hostId:g.hostId, bet:g.bet, timeControl:g.timeControl, rated:g.rated, rating:g.white?.rating||g.black?.rating }));
+    socket.emit('lobbyUpdate', { lobbies: open });
   });
 
   // 4. PHONE OTP LOGIN
@@ -710,9 +764,10 @@ io.on('connection', (socket)=>{
     if (!phone || phone.length<9) return cb && cb({ error: 'Invalid phone - use 077xxxxxxx' });
     const code = Math.floor(100000 + Math.random()*900000).toString();
     otpStore.set(phone, { code, expires: Date.now()+5*60*1000, attempts:0 });
-    console.log(`📲 OTP for ${phone}: ${code} - In production, send via SMS/EcoCash`);
-    // In production, integrate with EcoCash SMS or Twilio: await sendSMS(phone, `Your BetChess OTP is ${code}`)
-    cb && cb({ success:true, message: `OTP sent to ${phone} (Check server console in demo: ${code})`, code: code }); // returning code for demo only, remove in prod
+    // Production: hand this to your SMS gateway (Econet/EcoCash/Twilio), e.g.
+    //   await sendSMS(phone, `Your BetChess verification code is ${code}`);
+    console.log(`📲 OTP for ${phone}: ${code}${EXPOSE_OTP ? '' : ' (hidden in production)'}`);
+    cb && cb({ success:true, message: `OTP sent to ${phone}`, code: EXPOSE_OTP ? code : undefined });
     socket.emit('otpSent', { phone, expiresIn: 300 });
   });
 
@@ -902,6 +957,8 @@ io.on('connection', (socket)=>{
   socket.on('makeMovePvp', ({ userId, gameId, from, to, promotion }, cb)=>{
     const game=games.get(gameId);
     if (!game || game.status!=='playing') return cb && cb({ error: 'Game not found/finished' });
+    if (game.type!=='pvp_bet' && game.type!=='pvp_friend') return cb && cb({ error:'Not a PvP game' });
+    if (!game.black) return cb && cb({ error:'Waiting for opponent' });
     const playerColor=game.white.id===userId?'w':game.black.id===userId?'b':null;
     if (!playerColor || playerColor!==game.chessInstance.turn()) return cb && cb({ error: 'Not your turn' });
     try{
@@ -909,6 +966,7 @@ io.on('connection', (socket)=>{
       if (!move) return cb && cb({ error:'Invalid' });
       game.fen=game.chessInstance.fen();
       game.moves.push(move);
+      game.drawOffer=null; // any move rejects a pending draw offer
       // Clock: add increment to mover, switch turn timestamp
       const tc=parseTimeControl(game.timeControl);
       if (game.clocks) {
@@ -927,38 +985,82 @@ io.on('connection', (socket)=>{
     }catch(e){ cb && cb({ error:e.message }); }
   });
 
-  function handlePvpGameOver(game){
-    const isMate=game.chessInstance.isCheckmate();
-    const isDraw=game.chessInstance.isDraw() || game.chessInstance.isStalemate();
-    const turn=game.chessInstance.turn();
-    let winnerId=null, result='';
-    if (isMate){
-      winnerId=turn==='w'?game.black.id:game.white.id;
-      const winner=getUser(winnerId);
-      const gross=game.escrow;
-      const fee=gross*PLATFORM_FEE;
-      const payout=gross-fee;
-      winner.balance+=payout;
-      winner.stats.pvpWins++; winner.stats.wins++; winner.rating+=12; winner.stats.earned+=payout;
-      statsData.totalPayouts+=payout; statsData.totalFees+=fee;
-      getUser(winnerId===game.white.id?game.black.id:game.white.id).stats.losses++;
-      getUser(winnerId===game.white.id?game.black.id:game.white.id).rating=Math.max(100, getUser(winnerId===game.white.id?game.black.id:game.white.id).rating-8);
-      addTransaction(winnerId, 'win', payout, 'completed', `Won PvP ${game.id} vs ${winnerId===game.white.id?game.black.username:game.white.username} $${payout.toFixed(2)}`);
-      io.to(winnerId).emit('balanceUpdate', { balance:winner.balance });
-      result=`Checkmate! ${winner.username} wins $${payout.toFixed(2)}`;
-      updateLeaderboard(winnerId);
-    } else if (isDraw){
-      getUser(game.white.id).balance+=game.bet;
-      getUser(game.black.id).balance+=game.bet;
-      addTransaction(game.white.id, 'refund', game.bet, 'completed', `Draw ${game.id} refund`);
-      addTransaction(game.black.id, 'refund', game.bet, 'completed', `Draw ${game.id} refund`);
-      io.to(game.white.id).emit('balanceUpdate', { balance:getUser(game.white.id).balance });
-      io.to(game.black.id).emit('balanceUpdate', { balance:getUser(game.black.id).balance });
-      result='Draw';
+  /**
+   * Single settlement path for every PvP game (quick match, friend invite,
+   * casual or staked). `winnerColor` is 'w' | 'b' | 'draw'.
+   *  - stakes (escrow) are paid out to the winner (90%) or refunded on a draw,
+   *  - Elo is updated for BOTH players on every decisive or drawn result,
+   *  - stats / transactions / leaderboard are all kept in sync.
+   */
+  function settlePvp(game, winnerColor, resultText){
+    if (game.status === 'finished') return;
+    const whiteId = game.white.id;
+    const blackId = game.black.id;
+    const white = migrateUser(getUser(whiteId));
+    const black = migrateUser(getUser(blackId));
+    const stake = Number(game.bet || 0);
+    const escrow = Number(game.escrow || 0);
+    let result = resultText || '';
+
+    if (winnerColor === 'draw'){
+      if (stake > 0){
+        white.balance += stake;
+        black.balance += stake;
+        addTransaction(whiteId, 'refund', stake, 'completed', `Draw ${game.id} - stake refunded`);
+        addTransaction(blackId, 'refund', stake, 'completed', `Draw ${game.id} - stake refunded`);
+        io.to(whiteId).emit('balanceUpdate', { balance: white.balance });
+        io.to(blackId).emit('balanceUpdate', { balance: black.balance });
+      }
+      white.stats.draws++; black.stats.draws++;
+      if (!result) result = 'Draw — stakes refunded';
+    } else {
+      const winnerColorIsWhite = winnerColor === 'w';
+      const winner = winnerColorIsWhite ? white : black;
+      const loser = winnerColorIsWhite ? black : white;
+      const fee = escrow * PLATFORM_FEE;
+      const payout = escrow - fee;
+      if (payout > 0){
+        winner.balance += payout;
+        winner.stats.earned += payout;
+        statsData.totalPayouts += payout; statsData.totalFees += fee;
+        winner.stats.highestWin = Math.max(winner.stats.highestWin || 0, payout);
+        addTransaction(winner.id === whiteId ? whiteId : blackId, 'win', payout, 'completed',
+          `Won PvP ${game.id} vs ${loser.username} - $${payout.toFixed(2)}`);
+        io.to(winner.id === whiteId ? whiteId : blackId).emit('balanceUpdate', { balance: winner.balance });
+      }
+      winner.stats.wins++; winner.stats.pvpWins++;
+      loser.stats.losses++;
+      const elo = applyPvpRating(whiteId, blackId, winnerColorIsWhite ? 'win' : 'loss');
+      if (!result){
+        result = `${winner.username} wins${payout > 0 ? ` $${payout.toFixed(2)}` : ''} (${elo.a.delta >= 0 && winnerColorIsWhite ? '+' + elo.a.delta : winnerColorIsWhite ? elo.a.delta : '+' + elo.b.delta} Elo)`;
+      }
     }
-    game.status='finished'; game.result=result; game.winner=winnerId?(winnerId===game.white.id?'w':'b'):'draw';
+
+    if (winnerColor === 'draw') applyPvpRating(whiteId, blackId, 'draw');
+
+    game.status = 'finished';
+    game.result = result;
+    game.winner = winnerColor;
+    io.to(game.id).emit('gameOverPvp', { game: sanitizeGame(game) });
+    io.emit('leaderboardUpdate', { leaderboard: leaderboard.slice(0, 10) });
     markDirty();
     stopClock(game.id);
+  }
+
+  function handlePvpGameOver(game){
+    const isMate = game.chessInstance.isCheckmate();
+    const isDraw = game.chessInstance.isDraw() || game.chessInstance.isStalemate() || game.chessInstance.isThreefoldRepetition();
+    const turn = game.chessInstance.turn();
+    if (isMate){
+      const winnerColor = turn === 'w' ? 'b' : 'w';
+      const winnerName = winnerColor === 'w' ? game.white.username : game.black.username;
+      settlePvp(game, winnerColor, `Checkmate! ${winnerName} wins`);
+    } else if (isDraw){
+      settlePvp(game, 'draw', 'Draw');
+    } else {
+      // shouldn't happen, but guard
+      settlePvp(game, 'draw', 'Game over');
+    }
   }
 
   // ENGINE GAMES - SERVER-SIDE ENGINE
@@ -999,19 +1101,18 @@ io.on('connection', (socket)=>{
     games.set(gameId, game);
     socket.join(gameId);
     socket.emit('engineGameCreated', { game:sanitizeGame(game) });
+    startClock(game); // ticks whenever it is the player's turn; engine time is free
     markDirty();
     // If engine starts, generate move server-side
     if (game.chessInstance.turn()!==playerColor) {
       setTimeout(()=> generateAndSendEngineMove(game, socket), 600);
-    } else {
-      startClock(game);
     }
     cb && cb({ success:true, gameId });
   });
 
   socket.on('engineMove', ({ userId, gameId, from, to, promotion }, cb)=>{
     const game=games.get(gameId);
-    if (!game || (game.type!=='engine' && game.type!=='pvp_bet' && game.type!=='llm')) return cb && cb({ error:'Game not found' });
+    if (!game || (game.type!=='engine' && game.type!=='pvp_bet' && game.type!=='pvp_friend')) return cb && cb({ error:'Game not found' });
     if (game.type==='engine' && game.playerColor!==game.chessInstance.turn()) return cb && cb({ error:'Not your turn' });
     const fenBefore = game.fen;
     try{
@@ -1077,50 +1178,30 @@ io.on('connection', (socket)=>{
     }
   });
 
-  socket.on('engineReply', ({ userId, gameId, from, to, promotion }, cb)=>{
-    // LEGACY - now server generates moves, but accept for compatibility if client sends
+  // Legacy event: older clients used to send the engine's move themselves.
+  // The server is authoritative for every engine move, so if a stale client
+  // sends this we (re)generate the correct move rather than trusting it.
+  socket.on('engineReply', ({ gameId }, cb)=>{
     const game=games.get(gameId);
-    if (!game) return cb && cb({ error:'Not found' });
-    // Only allow if it's player's turn? Actually engineReply should be engine move - but now we ignore client engine moves for anti-cheat, generate our own
-    // For anti-cheat, we DO NOT trust client engine moves. We generate server move instead.
-    // So we ignore client provided and generate server move
-    if (game.type==='engine' && game.status==='playing') {
-      // If it's engine's turn, generate server move
-      if (game.chessInstance.turn()===game.engineColor) {
-        generateAndSendEngineMove(game, socket);
-        return cb && cb({ success:true, serverGenerated:true });
-      }
+    if (game && game.type==='engine' && game.status==='playing' && game.chessInstance.turn()===game.engineColor){
+      generateAndSendEngineMove(game, socket);
     }
-    // For LLM, allow
-    if (game.type==='llm') {
-      try{
-        const move=game.chessInstance.move({ from,to, promotion:promotion||'q' });
-        if (!move) return cb && cb({ error:'Invalid' });
-        game.fen=game.chessInstance.fen();
-        game.moves.push(move);
-        markDirty();
-        if (game.chessInstance.isGameOver()){
-          game.status='finished';
-          socket.emit('llmGameOver', { game:sanitizeGame(game), result:'Game over' });
-        } else {
-          socket.emit('moveMadeEngine', { game:sanitizeGame(game), move });
-        }
-        cb && cb({ success:true });
-      }catch(e){ cb && cb({ error:e.message }); }
-    }
+    cb && cb({ success:true, serverGenerated:true });
   });
 
   socket.on('engineGameOver', ({ userId, gameId, result }, cb)=>{
     const game=games.get(gameId);
     if (!game) return cb && cb({ error:'Not found' });
-    game.status='finished'; game.winner=game.playerColor==='w'?'b':'w'; game.result=`${getUser(userId).username} resigned`;
-    const user=getUser(userId);
+    if (game.status==='finished') return cb && cb({ success:true });
+    game.status='finished'; game.winner=game.playerColor==='w'?'b':'w'; game.result=`You resigned vs ${game.difficultyConfig?.label||'engine'}`;
+    const user=migrateUser(getUser(userId));
     user.stats.losses++;
     if (!game.isFree){
       jackpotPool+=game.bet*JACKPOT_CONTRIBUTION;
       addTransaction(userId, 'loss', 0, 'completed', `Lost $${game.bet} vs ${game.difficultyConfig?.label||'AI'} resigned ${(game.bet*JACKPOT_CONTRIBUTION).toFixed(2)} to jackpot`);
       io.emit('jackpotUpdate', { pool:jackpotPool });
     }
+    applyEngineRating(userId, game.difficultyConfig?.elo || 1500, 'loss', socket);
     socket.emit('engineGameFinal', { game:sanitizeGame(game), result:game.result, outcome:'loss', payout:0 });
     markDirty();
     stopClock(gameId);
@@ -1128,144 +1209,184 @@ io.on('connection', (socket)=>{
   });
 
 
-  // LLM games
-  socket.on('createLLMGame', ({ userId, bet, llmConfig, color, isFree }, cb)=>{
-    const user=getUser(userId);
-    if (!isFree && bet < MIN_BET) return cb && cb({ error:`Min $${MIN_BET}` });
-    if (!isFree && user.balance < bet) return cb && cb({ error:`Need $${bet}` });
-    if (!isFree){ user.balance-=parseFloat(bet); addTransaction(userId, 'bet', -parseFloat(bet), 'completed', `LLM Arena bet $${bet} vs ${llmConfig?.model||'AI'}`); }
-    const gameId='LLM-'+uuidv4().substring(0,6).toUpperCase();
-    const chessInst=new Chess();
-    const playerColor=color||'w';
-    const tc=parseTimeControl('10+0');
-    const game={
-      id:gameId,
-      type:'llm',
-      bet:isFree?0:parseFloat(bet),
-      llmConfig,
-      playerColor,
-      isFree,
-      white: playerColor==='w'?{ id:userId, username:user.username }:{ id:'llm', username:`🤖 ${llmConfig?.model||'LLM'}` },
-      black: playerColor==='b'?{ id:userId, username:user.username }:{ id:'llm', username:`🤖 ${llmConfig?.model||'LLM'}` },
-      fen:chessInst.fen(),
-      status:'playing',
-      moves:[],
-      history:[],
-      escrow:isFree?0:parseFloat(bet),
-      chessInstance:chessInst,
-      createdAt:new Date().toISOString(),
-      clocks:{ w:tc.base*1000, b:tc.base*1000, inc:tc.inc*1000 },
-      lastMoveAt:Date.now()
-    };
-    games.set(gameId, game);
-    socket.join(gameId);
-    socket.emit('llmGameCreated', { game:sanitizeGame(game) });
-    markDirty();
-    startClock(game);
-    cb && cb({ success:true, gameId });
-  });
-
-  socket.on('llmHumanMove', ({ userId, gameId, from, to, promotion }, cb)=>{
-    const game=games.get(gameId);
-    if (!game || game.type!=='llm') return cb && cb({ error:'Game not found' });
-    try{
-      const move=game.chessInstance.move({ from,to, promotion:promotion||'q' });
-      if (!move) return cb && cb({ error:'Invalid' });
-      game.fen=game.chessInstance.fen();
-      game.moves.push(move);
-      game.history.push(move.san);
-      const tc=parseTimeControl('10+0');
-      if (game.clocks){ game.clocks[move.color==='w'?'w':'b']+=tc.inc*1000; game.lastMoveAt=Date.now(); }
-      markDirty();
-      if (game.chessInstance.isGameOver()){
-        game.status='finished';
-        socket.emit('llmGameOver', { game:sanitizeGame(game), result:'Game over', outcome:'win' });
-        stopClock(gameId);
-      } else {
-        socket.emit('llmTurn', { gameId, fen:game.fen, moves:game.moves, history:game.history.join(' ') });
-      }
-      cb && cb({ success:true });
-    }catch(e){ cb && cb({ error:e.message }); }
-  });
-
-  socket.on('llmEngineMove', ({ userId, gameId, from, to, promotion }, cb)=>{
-    const game=games.get(gameId);
-    if (!game) return cb && cb({ error:'Not found' });
-    try{
-      const move=game.chessInstance.move({ from,to, promotion:promotion||'q' });
-      if (!move) return cb && cb({ error:'Invalid' });
-      game.fen=game.chessInstance.fen();
-      game.moves.push(move);
-      markDirty();
-      if (game.chessInstance.isGameOver()){
-        game.status='finished';
-        socket.emit('llmGameOver', { game:sanitizeGame(game), result:'Game over' });
-        stopClock(gameId);
-      } else {
-        socket.emit('moveMadeEngine', { game:sanitizeGame(game), move });
-      }
-      cb && cb({ success:true });
-    }catch(e){ cb && cb({ error:e.message }); }
-  });
-
   socket.on('resignPvp', ({ userId, gameId }, cb)=>{
     const game=games.get(gameId);
-    if (!game || game.type!=='pvp_bet') return cb && cb({ error:'No PvP' });
-    if (game.status!=='playing') return cb && cb({ error:'Finished' });
+    if (!game || (game.type!=='pvp_bet' && game.type!=='pvp_friend')) return cb && cb({ error:'No active game' });
+    if (game.status!=='playing') return cb && cb({ error:'Game already finished' });
     const isWhite=game.white.id===userId;
-    const winnerId=isWhite?game.black.id:game.white.id;
-    const winner=getUser(winnerId);
-    const gross=game.escrow;
-    const fee=gross*PLATFORM_FEE;
-    const payout=gross-fee;
-    winner.balance+=payout;
-    winner.stats.pvpWins++; winner.stats.wins++; winner.stats.earned+=payout;
-    game.status='finished';
-    game.result=`${getUser(userId).username} resigned - ${winner.username} wins $${payout.toFixed(2)}`;
-    game.winner=isWhite?'b':'w';
-    addTransaction(winnerId, 'win', payout, 'completed', `Opponent resigned PvP ${gameId} $${payout.toFixed(2)}`);
-    io.to(gameId).emit('gameOverPvp', { game:sanitizeGame(game) });
-    io.to(winnerId).emit('balanceUpdate', { balance:winner.balance });
-    updateLeaderboard(winnerId);
-    markDirty();
-    stopClock(gameId);
+    const isBlack=game.black && game.black.id===userId;
+    if (!isWhite && !isBlack) return cb && cb({ error:'You are not in this game' });
+    const loserName=getUser(userId).username;
+    const winnerName=isWhite?game.black.username:game.white.username;
+    settlePvp(game, isWhite?'b':'w', `${loserName} resigned — ${winnerName} wins`);
     cb && cb({ success:true });
   });
 
-  socket.on('createGame', ({ userId, bet, timeControl }, cb)=>{
-    const user=getUser(userId);
-    const betVal=parseFloat(bet);
-    if (user.balance < betVal) return cb && cb({ error:`Need $${betVal}` });
-    user.balance-=betVal;
-    const gameId='CUST-'+uuidv4().substring(0,5).toUpperCase();
+  // ---- Draw offers (real, over the socket) ----
+  socket.on('offerDraw', ({ userId, gameId }, cb)=>{
+    const game=games.get(gameId);
+    if (!game || (game.type!=='pvp_bet' && game.type!=='pvp_friend')) return cb && cb({ error:'No active game' });
+    if (game.status!=='playing') return cb && cb({ error:'Game already finished' });
+    const isWhite=game.white.id===userId;
+    if (!isWhite && (!game.black || game.black.id!==userId)) return cb && cb({ error:'You are not in this game' });
+    if (game.drawOffer && game.drawOffer.by !== userId) {
+      // Both players have now offered -> agreed draw.
+      game.drawOffer = null;
+      settlePvp(game, 'draw', 'Draw by mutual agreement');
+      return cb && cb({ success:true, agreed:true });
+    }
+    game.drawOffer = { by: userId, at: Date.now() };
+    const oppId = isWhite ? game.black?.id : game.white.id;
+    const name = getUser(userId).username;
+    if (oppId) io.to(oppId).emit('drawOffered', { by: name });
+    cb && cb({ success:true });
+  });
+
+  socket.on('respondDraw', ({ userId, gameId, accept }, cb)=>{
+    const game=games.get(gameId);
+    if (!game || game.status!=='playing') return cb && cb({ error:'No active game' });
+    if (!game.drawOffer) return cb && cb({ error:'No draw offer pending' });
+    const isOfferee = (game.white.id===userId || game.black?.id===userId) && game.drawOffer.by !== userId;
+    if (!isOfferee) return cb && cb({ error:'Not your offer to answer' });
+    if (accept){
+      game.drawOffer = null;
+      settlePvp(game, 'draw', 'Draw by mutual agreement');
+    } else {
+      const offererId = game.drawOffer.by;
+      game.drawOffer = null;
+      io.to(offererId).emit('drawDeclined', { by: getUser(userId).username });
+    }
+    cb && cb({ success:true });
+  });
+
+  // ---- Friend invites: create a shareable link, friend joins via it ----
+  socket.on('createFriendInvite', ({ userId, bet, timeControl, color }, cb)=>{
+    const user=migrateUser(getUser(userId));
+    const betVal=Math.max(0, parseFloat(bet)||0);
+    if (betVal > 0 && user.balance < betVal) return cb && cb({ error:`You need $${betVal.toFixed(2)} for this stake` });
+    const gameId='FR-'+uuidv4().substring(0,6).toUpperCase();
     const chessInst=new Chess();
     const tc=parseTimeControl(timeControl||'10+0');
+    // Host stake is escrowed at creation so an invite can't be created with
+    // money the host doesn't have; it is refunded if the invite expires.
+    if (betVal > 0){
+      user.balance-=betVal;
+      addTransaction(userId, 'bet', -betVal, 'completed', `Friend challenge ${gameId} - $${betVal.toFixed(2)} held in escrow`);
+      socket.emit('balanceUpdate', { balance:user.balance });
+    }
+    const hostColor = color === 'w' ? 'w' : color === 'b' ? 'b' : (Math.random()>0.5?'w':'b');
     const game={
       id:gameId,
-      type:'pvp_bet',
+      type:'pvp_friend',
       bet:betVal,
       pot:betVal*2,
-      white:{ id:userId, username:user.username, socketId:socket.id, rating:user.rating },
-      black:null,
+      hostId:userId,
+      hostColor,
+      white: hostColor==='w' ? { id:userId, username:user.username, socketId:socket.id, rating:user.rating } : null,
+      black: hostColor==='b' ? { id:userId, username:user.username, socketId:socket.id, rating:user.rating } : null,
       fen:chessInst.fen(),
       status:'waiting',
       moves:[],
-      escrow:betVal,
+      escrow:betVal, // host half; friend half added on join
       createdAt:new Date().toISOString(),
+      expiresAt:Date.now()+30*60*1000,
       timeControl: timeControl||'10+0',
+      rated:true,
       chessInstance:chessInst,
       clocks:{ w:tc.base*1000, b:tc.base*1000, inc:tc.inc*1000 }
     };
     games.set(gameId, game);
-    addTransaction(userId, 'bet', -betVal, 'completed', `Created custom PvP ${gameId} $${betVal}`);
-    socket.emit('balanceUpdate', { balance:user.balance });
-    cb && cb({ success:true, gameId, game:sanitizeGame(game) });
-    const betKey=betVal.toFixed(2);
-    let queue=betQueues.get(betKey)||[];
-    queue.push({ userId, socketId:socket.id, timeControl, bet:betVal, timestamp:Date.now(), customGameId:gameId });
-    betQueues.set(betKey, queue);
+    socket.join(gameId);
+    broadcastLobbies();
     markDirty();
+    cb && cb({ success:true, gameId, game:sanitizeGame(game) });
   });
+
+  socket.on('joinFriendGame', ({ gameId, userId }, cb)=>{
+    const game=games.get(gameId);
+    if (!game) return cb && cb({ error:'Invite not found' });
+    if (game.hostId === userId) {
+      // Host reconnecting to their own waiting/active invite.
+      socket.join(gameId);
+      if (game.status==='playing') {
+        socket.emit('friendGameStarted', { game:sanitizeGame(game), opponent:(game.white.id===userId?game.black:game.white).username });
+        socket.emit('gameStarted', { game:sanitizeGame(game) });
+      }
+      return cb && cb({ success:true, game:sanitizeGame(game) });
+    }
+    if (game.status==='playing' || game.status==='finished') {
+      // Too late to join - send them in as a spectator.
+      socket.join(gameId);
+      socket.emit('spectating', { game:sanitizeGame(game), spectators: io.sockets.adapter.rooms.get(gameId)?.size||0 });
+      return cb && cb({ error:'Game already started' });
+    }
+    const friend=migrateUser(getUser(userId));
+    if (game.bet > 0 && friend.balance < game.bet) return cb && cb({ error:`This challenge needs $${game.bet.toFixed(2)} to join` });
+
+    const hostColor=game.hostColor;
+    const host = getUser(game.hostId);
+    if (hostColor==='w'){
+      game.black={ id:userId, username:friend.username, socketId:socket.id, rating:friend.rating };
+    } else {
+      game.white={ id:userId, username:friend.username, socketId:socket.id, rating:friend.rating };
+    }
+    if (game.bet > 0){
+      friend.balance-=game.bet;
+      addTransaction(userId, 'bet', -game.bet, 'completed', `Joined friend game ${gameId} - $${game.bet.toFixed(2)} held in escrow`);
+      game.escrow = game.bet*2;
+      socket.emit('balanceUpdate', { balance:friend.balance });
+    } else {
+      game.escrow = 0;
+    }
+    game.status='playing';
+    game.pot=game.escrow;
+    game.fen=game.chessInstance.fen();
+    games.set(gameId, game);
+    socket.join(gameId);
+    try { io.sockets.sockets.get(game.white.socketId||game.black.socketId)?.join(gameId); } catch(e){}
+    const payload = sanitizeGame(game);
+    // Both players have joined the gameId room (host at creation, joiner now),
+    // so one broadcast lands on both clients.
+    io.to(gameId).emit('friendGameStarted', { game:payload, opponent:friend.username });
+    io.to(gameId).emit('gameStarted', { game:payload });
+    startClock(game);
+    broadcastLobbies();
+    markDirty();
+    cb && cb({ success:true, game:payload });
+  });
+
+  // Periodic sweep: expire stale friend invites and refund the host's stake.
+  if (!global.__friendInviteSweeper) {
+    global.__friendInviteSweeper = setInterval(()=>{
+      let changed=false;
+      for (const [gid, g] of games.entries()){
+        if (g.type==='pvp_friend' && g.status==='waiting' && g.expiresAt && Date.now() > g.expiresAt){
+          if (g.bet > 0){
+            const host=getUser(g.hostId);
+            host.balance+=g.bet;
+            addTransaction(g.hostId, 'refund', g.bet, 'completed', `Invite ${gid} expired - stake refunded`);
+            io.to(g.hostId).emit('balanceUpdate', { balance:host.balance });
+          }
+          games.delete(gid);
+          changed=true;
+        }
+      }
+      if (changed) broadcastLobbies();
+    }, 60*1000);
+  }
+
+  function broadcastLobbies(){
+    const open=Array.from(games.values())
+      .filter(g=> (g.type==='pvp_friend') && g.status==='waiting')
+      .map(g=>({
+        id:g.id, host:g.white?.username||g.black?.username||'Player',
+        hostId:g.hostId, bet:g.bet, timeControl:g.timeControl,
+        rated:g.rated, rating:g.white?.rating||g.black?.rating,
+      }));
+    io.emit('lobbyUpdate', { lobbies:open });
+  }
+  // Send the lobby list immediately on connection/registration.
+  setTimeout(broadcastLobbies, 500);
 
   // 5. SPECTATOR MODE + SHAREABLE LINKS
   socket.on('spectateGame', ({ gameId }, cb)=>{
@@ -1295,20 +1416,21 @@ io.on('connection', (socket)=>{
     cb && cb(p);
   });
 
-  socket.on('solvePuzzle', ({ userId, puzzleId, moves }, cb)=>{
+  socket.on('solvePuzzle', ({ userId, puzzleId, moves, puzzleRating }, cb)=>{
     const puzzle=PUZZLES.find(p=>p.id===puzzleId);
     if (!puzzle) return cb && cb({ error:'Puzzle not found' });
     const isCorrect=JSON.stringify(moves)===JSON.stringify(puzzle.solution) || moves[0]===puzzle.solution[0];
-    const user=getUser(userId);
+    const user=migrateUser(getUser(userId));
     if (isCorrect){
-      user.stats.puzzlesSolved++;
-      user.rating+=3;
-      addTransaction(userId, 'puzzle', 0.10, 'completed', `Solved puzzle ${puzzleId} +$0.10`);
-      user.balance+=0.10;
-      socket.emit('balanceUpdate', { balance:user.balance });
+      user.stats.puzzlesSolved=(user.stats.puzzlesSolved||0)+1;
+      // Tactics rating moves on its own Elo scale (no money).
+      const current=Number(puzzleRating) || user.stats.puzzleRating || rating.START_RATING;
+      const delta=rating.puzzleDelta(current, puzzle.rating || 1200, true);
+      user.stats.puzzleRating=Math.max(rating.MIN_RATING, current+delta);
+      socket.emit('statsUpdate', user.stats);
       markDirty();
     }
-    cb && cb({ correct:isCorrect, solution:puzzle.solution });
+    cb && cb({ correct:isCorrect, solution:puzzle.solution, puzzleRating:user.stats.puzzleRating });
   });
 
   socket.on('disconnect', ()=>{
@@ -1333,6 +1455,11 @@ io.on('connection', (socket)=>{
   });
 });
 
+function publicPlayer(p){
+  if (!p) return null;
+  return { id: p.id, username: p.username, rating: p.rating || null };
+}
+
 function sanitizeGame(game){
   if (!game) return null;
   return {
@@ -1340,6 +1467,7 @@ function sanitizeGame(game){
     type: game.type,
     bet: game.bet,
     pot: game.escrow || (game.bet?game.bet*2:0),
+    escrow: game.escrow || 0,
     isFree: game.isFree,
     difficulty: game.difficulty,
     difficultyConfig: game.difficultyConfig
@@ -1349,14 +1477,14 @@ function sanitizeGame(game){
     antiCheat: game.antiCheat || null,
     playerColor: game.playerColor,
     engineColor: game.engineColor,
-    llmConfig: game.llmConfig,
-    white: game.white,
-    black: game.black,
+    white: publicPlayer(game.white),
+    black: publicPlayer(game.black),
     fen: game.fen,
     status: game.status,
     moves: game.moves,
     result: game.result,
     winner: game.winner,
+    drawOffer: game.drawOffer || null,
     pgn: game.chessInstance?game.chessInstance.pgn():'',
     turn: game.chessInstance?game.chessInstance.turn():'w',
     isCheck: game.chessInstance?game.chessInstance.isCheck():false,
@@ -1364,7 +1492,6 @@ function sanitizeGame(game){
     rawClocks: game.clocks,
     timeControl: game.timeControl,
     createdAt: game.createdAt,
-    commentary: game.commentary||[],
     spectators: 0
   };
 }

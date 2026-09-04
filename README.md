@@ -1,9 +1,28 @@
 # ♔ BetChess ZW
 
-Zimbabwe's real-money chess platform: bet against a **real Lichess Stockfish 18 engine**, or get
-matched with another player staking the same amount. Wallet runs on **EcoCash** (plus InnBucks,
-OneMoney, bank transfer and cash agents), with a sandbox mode so the whole flow is testable before
-you have merchant credentials.
+Zimbabwe's real-money chess platform. Play the rated **Lichess Stockfish 18** engine ladder
+(Easy 800 → Grandmaster 2850), **invite a friend with a shareable link**, or quick-match against
+another player staking the same amount. Every result updates your **Elo rating** (standard Elo with
+provisional K-factor). The wallet runs on **EcoCash** (plus InnBucks, OneMoney, bank transfer and
+cash agents), with a sandbox mode so the whole flow is testable before you have merchant
+credentials.
+
+The client is a single-page dark **glassmorphism** interface: frosted glass cards, SVG chess pieces,
+5 board themes, a conversational "Chess Concierge" planner with quick-action pills, micro-interactions
+on every control, and real draw offers between friends.
+
+## Game modes
+
+| Mode | How it works | Stake | Rated |
+| --- | --- | --- | --- |
+| **vs Engine** | Server-authoritative Lichess Stockfish 18, 5 strength tiers | optional | yes |
+| **Invite a friend** | Create a challenge → share the `?invite=FR-XXXX` link → friend joins instantly | optional (escrow) | yes |
+| **Quick match** | Matched with another player staking the same amount | set by slider | yes |
+| **Spectate** | Share/`open ?game=` links to watch live with chat | — | — |
+| **Puzzles** | Tactics trainer with its own Elo rating | free | tactics Elo |
+
+Friends in a live game can offer/accept **draws** over the socket; stakes are held in escrow and the
+winner takes 90% (10% platform fee), draws refund both sides. Expired invites auto-refund the host.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -24,7 +43,7 @@ you have merchant credentials.
 ```bash
 npm install          # also vendors chess.js + the Lichess engine into public/
 npm start            # http://localhost:3000   (admin: /admin)
-npm test             # 27 unit + client tests
+npm test             # 36 unit + client tests (engine, payments, ratings, client boot)
 npm run test:e2e     # plays a real game against the engine (server must be running)
 ```
 
@@ -33,7 +52,8 @@ No configuration is required. Out of the box:
 * the **Lichess Stockfish 18** wasm engine runs in-process (no API key, no external service),
 * **payments run in sandbox mode** — deposits and withdrawals settle automatically so you can
   click through the full flow,
-* every new wallet starts with **$12.50** of play credit.
+* new wallets start at **0 balance** for production; set `WELCOME_BONUS` to give test credit,
+* every player starts at **1200 Elo** (provisional until 25 rated games), with a separate tactics rating.
 
 ---
 
@@ -204,7 +224,7 @@ Notes:
 ## Tests
 
 ```bash
-npm test          # 27 tests: engine, payments, client boot (jsdom)
+npm test          # 36 tests: engine, payments, Elo ratings, client boot (jsdom)
 npm run test:e2e  # end-to-end against a running server
 ```
 

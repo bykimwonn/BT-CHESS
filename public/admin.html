@@ -67,7 +67,23 @@ curl -X POST https://yourapp.com/api/ecocash/deposit -H "Content-Type:applicatio
 </div>
 
 <div class="card">
-<h3>💸 Pending Withdrawals (Need Approval)</h3>
+<h3>🤖 Engine</h3>
+<div id="engineStatus" style="font-size:12px;line-height:1.6"></div>
+</div>
+
+<div class="card">
+<h3>💳 Payment Methods</h3>
+<div id="paymentProviders" style="font-size:12px;line-height:1.6"></div>
+<div style="margin-top:10px;font-size:11px;color:var(--muted)">Mode: <b id="paymentMode">-</b> • Deposits <b id="paymentDeposits">0</b> • Withdrawals <b id="paymentWithdrawals">0</b> • Failed <b id="paymentFailed">0</b></div>
+</div>
+
+<div class="card">
+<h3>🧾 Payment Transactions (approve / reject)</h3>
+<div style="overflow-x:auto"><table><thead><tr><th>Ref</th><th>User</th><th>Type</th><th>Method</th><th>Amount</th><th>Status</th><th>Created</th><th>Action</th></tr></thead><tbody id="paymentsTable"></tbody></table></div>
+</div>
+
+<div class="card">
+<h3>💸 Pending Withdrawals</h3>
 <div id="withdrawalsList"></div>
 </div>
 
@@ -129,7 +145,37 @@ async function loadAdmin(){
     
     document.getElementById('queuesList').innerHTML = Object.entries(data.betQueues).map(([bet,count])=> `<div>Bet $${bet}: ${count} waiting</div>`).join('') || 'No queues';
     
-    document.getElementById('withdrawalsList').innerHTML = data.pendingWithdrawals.map(w=> `<div style="background:#3c3934;border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><div><b>${w.username}</b> ${w.method} $${w.amount} → ${w.accountDetails}<br><small>${new Date(w.createdAt).toLocaleString()} - ${w.status}</small></div><div>${w.status==='pending'?`<button class="btn btn-green" onclick="approveWithdrawal('${w.id}')">Approve & Pay via EcoCash</button>`: w.status}</div></div>`).join('') || 'No pending';
+    if (data.engine){
+      document.getElementById('engineStatus').innerHTML =
+        `<b>${data.engine.engine === 'stockfish-18-lichess' ? '✅ Lichess Stockfish 18' : '⚠️ JS fallback engine'}</b> (variant: ${data.engine.variant||'-'})<br>` +
+        `Lichess cloud eval: ${data.engine.cloud?.available ? '✅ enabled' : '⏸ disabled'}${data.engine.cloud?.lastError ? ` (${data.engine.cloud.lastError})` : ''}<br>` +
+        `Moves played: ${data.engine.stats?.moves||0} (avg ${data.engine.stats?.avgMs||0}ms) • sources: ${JSON.stringify(data.engine.stats?.bySource||{})}<br>` +
+        `Queue depth: ${data.engine.queueDepth||0}`;
+    }
+
+    if (data.payments){
+      document.getElementById('paymentProviders').innerHTML = (data.payments.providers||[]).map(p=>
+        `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #3d3a36"><span>${p.id} <small style="color:var(--muted)">${p.kind} $${p.minAmount}–$${p.maxAmount}</small></span><span style="color:${p.live?'var(--green)':'#e6b800'}">${p.live?'LIVE':'SANDBOX'}</span></div>`
+      ).join('');
+      document.getElementById('paymentMode').textContent = data.payments.mode;
+      const st = data.payments.stats||{};
+      document.getElementById('paymentDeposits').textContent = `${st.deposits||0} ($${(st.depositVolume||0).toFixed(2)})`;
+      document.getElementById('paymentWithdrawals').textContent = `${st.withdrawals||0} ($${(st.withdrawVolume||0).toFixed(2)})`;
+      document.getElementById('paymentFailed').textContent = st.failed||0;
+    }
+
+    if (data.paymentTransactions){
+      document.getElementById('paymentsTable').innerHTML = data.paymentTransactions.map(t=>{
+        const canApprove = ['pending','processing'].includes(t.status);
+        return `<tr><td><small>${(t.reference||'').slice(0,14)}</small></td><td>${t.username||''}</td><td>${t.type}</td><td>${t.provider}</td><td>$${Number(t.amount).toFixed(2)}</td>` +
+          `<td style="color:${t.status==='completed'?'var(--green)':['failed','rejected'].includes(t.status)?'#e57373':'#e6b800'}">${t.status}</td>` +
+          `<td><small>${new Date(t.createdAt).toLocaleString()}</small></td>` +
+          `<td>${canApprove?`<button class="btn btn-green" style="padding:4px 8px;font-size:11px" onclick="approvePayment('${t.reference}')">Approve</button> ` +
+            `<button class="btn btn-outline" style="padding:4px 8px;font-size:11px" onclick="approvePayment('${t.reference}', true)">Reject</button>`:''}</td></tr>`;
+      }).join('') || '<tr><td colspan="8">No payment transactions yet</td></tr>';
+    }
+
+    document.getElementById('withdrawalsList').innerHTML = data.pendingWithdrawals.map(w=> `<div style="background:#3c3934;border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><div><b>${w.username}</b> ${w.method} $${w.amount} → ${w.accountDetails}<br><small>${new Date(w.createdAt).toLocaleString()} - ${w.status}</small></div><div>${w.status==='pending'?`<button class="btn btn-green" onclick="approvePayment('${w.reference}')">Approve & Pay</button>`: w.status}</div></div>`).join('') || 'No pending';
     
   } catch(e) {
     alert('Login failed: ' + e.message);
@@ -141,10 +187,13 @@ async function jackpotAction(action){
   const data = await res.json();
   if (data.success) { alert(`Jackpot now $${data.pool.toFixed(2)}`); loadAdmin(); }
 }
-async function approveWithdrawal(id){
-  const res = await fetch('/api/admin/withdraw/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: adminPw, withdrawalId: id }) });
+async function approvePayment(reference, reject){
+  if (!reference) return alert('This withdrawal has no payment reference (legacy record).');
+  const res = await fetch('/api/admin/payments/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password: adminPw, reference, reject: !!reject }) });
   const data = await res.json();
-  if (data.success) { alert('Approved & EcoCash B2C triggered!'); loadAdmin(); }
+  if (data.error) return alert('Failed: ' + data.error);
+  alert(`${reject ? 'Rejected' : 'Approved'} ${reference} (${data.transaction.status})`);
+  loadAdmin();
 }
 </script>
 </body>

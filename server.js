@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -6,6 +8,10 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+
+const { EngineService, PRIORITY } = require('./lib/engine');
+const { DIFFICULTY_PROFILES, publicProfiles, getProfile } = require('./lib/engine/strength');
+const { PaymentService } = require('./lib/payments');
 
 const app = express();
 const server = http.createServer(app);
@@ -39,6 +45,7 @@ let transactionsLog = loadJSON('transactions.json', []); // global log for admin
 let pendingWithdrawals = loadJSON('withdrawals.json', []); // for admin approval
 let totalPayouts = loadJSON('stats.json', { totalPayouts: 0, totalFees: 0, totalBets: 0 }).totalPayouts;
 let statsData = loadJSON('stats.json', { totalPayouts: 0, totalFees: 0, totalBets: 0 });
+let paymentsData = loadJSON('payments.json', []);
 
 let dirty = false;
 function markDirty() { dirty = true; }
@@ -50,8 +57,8 @@ setInterval(() => {
   saveJSON('transactions.json', transactionsLog.slice(0, 500));
   saveJSON('withdrawals.json', pendingWithdrawals.slice(0, 200));
   saveJSON('stats.json', statsData);
+  saveJSON('payments.json', payments.store.toJSON());
   dirty = false;
-  console.log('💾 DB saved');
 }, 3000);
 
 // Convert loaded usersData to Map for runtime
@@ -67,13 +74,7 @@ const MIN_BET = 0.50;
 const JACKPOT_CONTRIBUTION = 0.02;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123ZW';
 
-const DIFFICULTY_CONFIG = {
-  easy:    { label: 'Easy', elo: 800, skill: 1, multiplier: 1.6, color: '#81b64c', depth: 8, desc: 'Beginner' },
-  medium:  { label: 'Medium', elo: 1250, skill: 6, multiplier: 2.5, color: '#f1c40f', depth: 12, desc: 'Casual' },
-  hard:    { label: 'Hard', elo: 1800, skill: 12, multiplier: 4.2, color: '#e67e22', depth: 16, desc: 'Club' },
-  master:  { label: 'Master', elo: 2400, skill: 20, multiplier: 8.0, color: '#e74c3c', depth: 19, desc: 'Master + Jackpot' },
-  grandmaster: { label: 'Grandmaster', elo: 2850, skill: 20, multiplier: 15.0, color: '#9b59b6', depth: 22, desc: '15x + Jackpot!' }
-};
+const DIFFICULTY_CONFIG = DIFFICULTY_PROFILES;
 
 const PUZZLES = [
   { id: 1, fen: 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3', solution: ['f3g5','d7d5'], rating: 1200, theme: 'Fork', desc: 'Knight fork wins material' },
@@ -161,146 +162,177 @@ function updateLeaderboard(userId) {
   markDirty();
 }
 
-// ========== 6. REAL ECOCASH API STUB ==========
-const EcoCash = {
-  // In production, set these env vars
-  merchantCode: process.env.ECOCASH_MERCHANT_CODE || null,
-  apiKey: process.env.ECOCASH_API_KEY || null,
-  apiUrl: process.env.ECOCASH_API_URL || 'https://api.ecocash.co.zw/api/v1',
-  
-  async initiateC2B({ phone, amount, reference }) {
-    console.log(`📱 EcoCash C2B Request: ${phone} $${amount} ref ${reference}`);
-    
-    if (!this.merchantCode || !this.apiKey) {
-      console.log('⚠️ EcoCash credentials not set - using MOCK mode');
-      // Simulate EcoCash USSD flow
-      return { success: true, mock: true, message: `EcoCash prompt sent to ${phone}`, transactionId: 'MOCK-'+uuidv4().substring(0,8), status: 'PENDING' };
-    }
-
-    try {
-      // REAL implementation template for Cassava / EcoCash API
-      // Example payload - adjust to actual EcoCash API docs: https://developers.ecocash.co.zw
-      const payload = {
-        merchantCode: this.merchantCode,
-        phoneNumber: phone.startsWith('0') ? '263' + phone.substring(1) : phone,
-        amount: amount,
-        currency: 'USD',
-        reference: reference,
-        description: `BetChess ZW Deposit $${amount}`,
-        returnUrl: `${process.env.BASE_URL || 'http://localhost:3000'}/api/ecocash/callback`,
-        // ... other required fields
-      };
-
-      // const res = await fetch(`${this.apiUrl}/c2b/initiate`, {
-      //   method: 'POST',
-      //   headers: { 'Authorization': `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(payload)
-      // });
-      // const data = await res.json();
-      // return data;
-
-      // For now mock even with creds (until real integration tested)
-      return { success: true, mock: false, transactionId: 'ECO-'+uuidv4().substring(0,8), status: 'PENDING', payload };
-    } catch (e) {
-      console.error('EcoCash C2B error', e);
-      throw e;
-    }
+// ========== 6. PAYMENTS (EcoCash + InnBucks + OneMoney + Bank + Agent) ==========
+// Real money movement lives in ./lib/payments. Sandbox by default; set
+// PAYMENT_MODE=live plus the merchant credentials in .env to go live.
+const payments = new PaymentService({
+  hooks: {
+    getUser,
+    credit: (userId, amount, meta) => {
+      const user = getUser(userId);
+      user.balance += Number(amount);
+      const label = meta?.type === 'refund'
+        ? `Refund ${meta.details || ''} (${meta.provider})`
+        : `${(meta?.provider || 'wallet').toUpperCase()} deposit ${meta?.reference || ''}`.trim();
+      addTransaction(userId, meta?.type === 'refund' ? 'refund' : 'deposit', Number(amount), 'completed', label);
+      io.to(userId).emit('balanceUpdate', { balance: user.balance });
+      io.to(userId).emit('transactionUpdate', user.transactions);
+      markDirty();
+    },
+    debit: (userId, amount, meta) => {
+      const user = getUser(userId);
+      user.balance -= Number(amount);
+      addTransaction(userId, 'withdraw', -Number(amount), 'pending', `${meta?.provider || 'wallet'} withdrawal requested`);
+      io.to(userId).emit('balanceUpdate', { balance: user.balance });
+      io.to(userId).emit('transactionUpdate', user.transactions);
+      markDirty();
+    },
+    emit: (userId, event, payload) => io.to(userId).emit(event, payload),
+    log: (msg) => console.log(msg),
   },
+  log: (msg) => console.log(msg),
+});
+payments.store.hydrate(paymentsData);
 
-  async initiateB2C({ phone, amount, reference }) {
-    console.log(`💸 EcoCash B2C Withdraw: ${phone} $${amount} ref ${reference}`);
-    if (!this.merchantCode || !this.apiKey) {
-      console.log('⚠️ Mock B2C - would send to', phone);
-      return { success: true, mock: true, transactionId: 'MOCK-WD-'+uuidv4().substring(0,8), status: 'COMPLETED' };
-    }
-    // REAL B2C implementation similar to above
-    return { success: true, mock: false, transactionId: 'ECO-WD-'+uuidv4().substring(0,8), status: 'PENDING' };
-  },
+// ========== 3. ENGINE (Lichess Stockfish 18) ==========
+// Authoritative engine: the server owns every computer move, clients never
+// send engine moves (that was the old cheat vector and the double-move bug).
+const engine = new EngineService({
+  log: (msg) => console.log(msg),
+});
 
-  async verifyTransaction(transactionId) {
-    // Verify status via EcoCash API
-    if (!this.apiKey) return { status: 'COMPLETED', mock: true };
-    // const res = await fetch(`${this.apiUrl}/transactions/${transactionId}`, { headers: { Authorization: `Bearer ${this.apiKey}` } });
-    // return res.json();
-    return { status: 'COMPLETED' };
+/** chess.js throws on illegal moves - keep every call site boring. */
+function safeMove(chess, move) {
+  try {
+    return chess.move(move);
+  } catch (e) {
+    return null;
   }
-};
-
-// ========== 3. SERVER-SIDE STOCKFISH ENGINE (Anti-Cheat) ==========
-function evaluateBoard(chess) {
-  // Simple material eval
-  const values = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-  let score = 0;
-  const board = chess.board();
-  for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
-    const p = board[r][c];
-    if (p) {
-      const v = values[p.type] || 0;
-      score += p.color==='w' ? v : -v;
-    }
-  }
-  // Add tiny random to avoid deterministic
-  score += (Math.random()-0.5)*0.2;
-  return score;
 }
 
-function getServerEngineMove(fen, difficulty) {
-  const chess = new Chess(fen);
-  const moves = chess.moves({ verbose: true });
-  if (moves.length===0) return null;
+/**
+ * Play the engine's move in a game. Guarded so a late/duplicate request can
+ * never produce two moves in a row.
+ */
+async function generateAndSendEngineMove(game, sock) {
+  if (!game || game.status !== 'playing' || game.engineThinking) return null;
+  if (game.chessInstance.turn() !== game.engineColor) return null;
 
-  const cfg = DIFFICULTY_CONFIG[difficulty] || DIFFICULTY_CONFIG.medium;
-
-  // Easy: random
-  if (difficulty==='easy' || cfg.skill <=2) {
-    return moves[Math.floor(Math.random()*moves.length)];
-  }
-
-  // Medium: prefer captures, checks
-  if (difficulty==='medium') {
-    const captures = moves.filter(m=> m.captured);
-    if (captures.length>0 && Math.random()>0.3) return captures[Math.floor(Math.random()*captures.length)];
-    const checks = moves.filter(m=> {
-      const tmp = new Chess(fen);
-      tmp.move({ from:m.from, to:m.to, promotion:m.promotion||'q' });
-      return tmp.isCheck();
+  game.engineThinking = true;
+  try {
+    const res = await engine.getMove({
+      fen: game.fen,
+      difficulty: game.difficulty || 'medium',
+      allowCloud: true,
     });
-    if (checks.length>0 && Math.random()>0.5) return checks[0];
-    return moves[Math.floor(Math.random()*moves.length)];
-  }
+    if (!game || game.status !== 'playing') return null;
 
-  // Hard+: minimax shallow
-  let bestMove = null;
-  let bestScore = chess.turn()==='w' ? -Infinity : Infinity;
-  const isWhiteTurn = chess.turn()==='w';
+    const move = safeMove(game.chessInstance, {
+      from: res.from,
+      to: res.to,
+      promotion: res.promotion || 'q',
+    });
+    if (!move) return null;
 
-  for (let m of moves) {
-    const tmp = new Chess(fen);
-    tmp.move({ from:m.from, to:m.to, promotion:m.promotion||'q' });
-    let score = evaluateBoard(tmp);
-    // Penalize moving into check? chess.js already prevents illegal
-    // Bonus for check, capture
-    if (tmp.isCheck()) score += isWhiteTurn ? 0.5 : -0.5;
-    if (m.captured) score += isWhiteTurn ? ( {p:1,n:3,b:3,r:5,q:9}[m.captured]||0 )*0.1 : -( {p:1,n:3,b:3,r:5,q:9}[m.captured]||0 )*0.1;
+    game.fen = game.chessInstance.fen();
+    game.moves.push(move);
+    game.lastMoveAt = Date.now();
+    game.lastEngine = {
+      source: res.source,
+      depth: res.depth,
+      eval: res.eval,
+      pv: res.pv,
+      elapsedMs: res.elapsedMs,
+    };
+    markDirty();
 
-    if (isWhiteTurn) {
-      if (score > bestScore) { bestScore=score; bestMove=m; }
+    const payload = { game: sanitizeGame(game), move, engine: game.lastEngine };
+    if (game.chessInstance.isGameOver()) {
+      const playerId = game.white.id !== 'stockfish' ? game.white.id : game.black.id;
+      handleEngineOver(game, playerId, sock);
+      stopClock(game.id);
     } else {
-      if (score < bestScore) { bestScore=score; bestMove=m; }
+      (sock && sock.connected !== false ? sock : io.to(game.id)).emit('moveMadeEngine', payload);
     }
+    return move;
+  } catch (err) {
+    console.error('[engine] move failed:', err.message);
+    return null;
+  } finally {
+    if (game) game.engineThinking = false;
   }
+}
 
-  // For master/GM, add deeper lookahead with 10% chance of blunder for hard
-  if (difficulty==='master' || difficulty==='grandmaster') {
-    // With some randomness, avoid perfect play for slightly weaker levels
-    if (difficulty==='master' && Math.random()<0.15) {
-      // blunder: pick second best or random
-      const others = moves.filter(x=> x!==bestMove);
-      if (others.length>0 && Math.random()<0.5) return others[Math.floor(Math.random()*others.length)];
+function handleEngineOver(game, userId, sock){
+  const isMate=game.chessInstance.isCheckmate();
+  const isDraw=game.chessInstance.isDraw()||game.chessInstance.isStalemate();
+  const turn=game.chessInstance.turn();
+  const user=getUser(userId);
+  let outcome='draw', payout=0, resultText='';
+  if (isMate){
+    const winnerColor=turn==='w'?'b':'w';
+    const playerWon=winnerColor===game.playerColor;
+    if (playerWon){
+      outcome='win';
+      if (!game.isFree){
+        const gross=game.bet*game.difficultyConfig.multiplier;
+        const fee=gross*PLATFORM_FEE;
+        payout=gross-fee;
+        let jackpotWin=0;
+        if (['master','grandmaster'].includes(game.difficulty) && Math.random()<0.15){
+          jackpotWin=jackpotPool*0.1;
+          payout+=jackpotWin;
+          jackpotPool-=jackpotWin;
+          user.stats.jackpotWins++;
+          addTransaction(userId, 'jackpot', jackpotWin, 'completed', `JACKPOT! 10% pool $${jackpotWin.toFixed(2)} vs ${game.difficultyConfig.label}`);
+        }
+        if (game.difficulty==='grandmaster'){
+          payout+=10;
+          user.rating+=50;
+          let entry=leaderboard.find(l=>l.userId===userId);
+          if (!entry){ entry={ userId, username:user.username, winsVsGM:0, earnings:0, highestWin:0, lastWin:null, rating:user.rating }; leaderboard.push(entry); }
+          entry.winsVsGM++;
+          entry.lastWin=new Date().toISOString();
+          updateLeaderboard(userId);
+          io.emit('leaderboardUpdate', { leaderboard:leaderboard.slice(0,10) });
+        }
+        user.balance+=payout;
+        statsData.totalPayouts+=payout; statsData.totalFees+=gross*PLATFORM_FEE;
+        user.stats.wins++; user.stats.engineWins++; user.stats.earned+=payout;
+        user.stats.highestWin=Math.max(user.stats.highestWin||0, payout);
+        addTransaction(userId, 'win', payout, 'completed', `Beat Stockfish ${game.difficultyConfig.label} Won $${payout.toFixed(2)} (${game.difficultyConfig.multiplier}x)`);
+        totalPayouts+=payout;
+      } else {
+        user.stats.freeGames++;
+      }
+      resultText=`You beat Stockfish ${game.difficultyConfig.label}! ${game.isFree?'':`+$${payout.toFixed(2)} ${payout>game.bet*game.difficultyConfig.multiplier?' + JACKPOT!':''}`}`;
+    } else {
+      outcome='loss';
+      user.stats.losses++;
+      if (!game.isFree){
+        jackpotPool+=game.bet*JACKPOT_CONTRIBUTION;
+        io.emit('jackpotUpdate', { pool:jackpotPool });
+        addTransaction(userId, 'loss', 0, 'completed', `Lost $${game.bet} vs ${game.difficultyConfig.label}. ${(game.bet*JACKPOT_CONTRIBUTION).toFixed(2)} to jackpot`);
+      }
+      resultText=`Stockfish ${game.difficultyConfig.label} checkmates you`;
     }
+  } else if (isDraw){
+    outcome='draw'; resultText='Draw';
+    if (!game.isFree){
+      user.balance+=game.bet;
+      addTransaction(userId, 'refund', game.bet, 'completed', `Draw vs ${game.difficultyConfig.label} refund`);
+    }
+    user.stats.draws++;
   }
-
-  return bestMove || moves[0];
+  game.status='finished'; game.result=resultText; game.winner=outcome==='win'?game.playerColor:outcome==='loss'?game.engineColor:'draw';
+  sock.emit('balanceUpdate', { balance:user.balance });
+  sock.emit('transactionUpdate', user.transactions);
+  sock.emit('statsUpdate', user.stats);
+  sock.emit('engineGameFinal', { game:sanitizeGame(game), result:resultText, outcome, payout, multiplier:game.difficultyConfig.multiplier, jackpotPool });
+  if (!game.isFree) sock.emit('jackpotUpdate', { pool:jackpotPool });
+  if (leaderboard.length) io.emit('leaderboardUpdate', { leaderboard:leaderboard.slice(0,10) });
+  markDirty();
+  stopClock(game.id);
 }
 
 // ========== 2. REAL TICKING CLOCKS ==========
@@ -427,7 +459,17 @@ function handleFlag(game, flaggedColor) {
 }
 
 // ========== API ROUTES ==========
-app.get('/api/config', (req,res)=>{ res.json({ difficultyConfig: DIFFICULTY_CONFIG, minBet: MIN_BET, jackpotPool, totalPayouts, stats: statsData }); });
+app.get('/api/config', (req,res)=>{
+  res.json({
+    difficultyConfig: publicProfiles(),
+    minBet: MIN_BET,
+    jackpotPool,
+    totalPayouts,
+    stats: statsData,
+    engine: engine.status(),
+    payments: payments.status(),
+  });
+});
 app.get('/api/leaderboard', (req,res)=>{ res.json({ leaderboard, jackpotPool }); });
 app.get('/api/puzzles/random', (req,res)=>{ res.json(PUZZLES[Math.floor(Math.random()*PUZZLES.length)]); });
 app.get('/api/puzzles/:id', (req,res)=>{ const p=PUZZLES.find(x=> x.id == req.params.id); if(!p) return res.status(404).json({error:'Not found'}); res.json(p); });
@@ -444,48 +486,105 @@ app.get('/api/stats/live', (req,res)=>{
   res.json({ activeGames, waitingQueues, totalUsers: users.size, jackpotPool, totalPayouts, totalFees: statsData.totalFees, totalBets: statsData.totalBets });
 });
 
-// 6. EcoCash real stub routes
-app.post('/api/ecocash/deposit', async (req,res)=>{
-  const { phone, amount, userId } = req.body;
-  if (!phone || !amount) return res.status(400).json({ error: 'Phone and amount required' });
+// 6. PAYMENTS API (EcoCash + InnBucks + OneMoney + Bank + Agent)
+app.get('/api/payments/providers', (req,res)=> res.json({ providers: payments.listProviders(), mode: payments.mode }));
+
+app.get('/api/payments/status', (req,res)=> res.json(payments.status()));
+
+app.get('/api/payments/transactions', (req,res)=>{
+  const { userId } = req.query;
+  res.json({ transactions: userId ? payments.store.byUser(userId) : payments.store.recent(200) });
+});
+
+app.get('/api/payments/:reference', (req,res)=>{
+  const tx = payments.store.get(req.params.reference);
+  if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+  res.json(tx);
+});
+
+app.post('/api/payments/deposit', async (req,res)=>{
+  const { userId, provider = 'ecocash', amount, phone, account } = req.body || {};
+  if (!userId || !amount) return res.status(400).json({ error: 'userId and amount required' });
   try {
-    const result = await EcoCash.initiateC2B({ phone, amount, reference: `DEP-${userId}-${Date.now()}` });
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const tx = await payments.requestDeposit({ userId, providerId: provider, amount, phone, account });
+    res.json({ success: true, transaction: tx });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/payments/withdraw', async (req,res)=>{
+  const { userId, provider = 'ecocash', amount, phone, account } = req.body || {};
+  if (!userId || !amount) return res.status(400).json({ error: 'userId and amount required' });
+  try {
+    const tx = await payments.requestWithdraw({ userId, providerId: provider, amount, phone, account });
+    res.json({ success: true, transaction: tx });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Provider callbacks. Raw body is required so the HMAC signature can be checked.
+app.post('/api/payments/webhook/:provider', express.raw({ type: '*/*', limit: '256kb' }), async (req,res)=>{
+  const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+  let body = {};
+  try { body = rawBody ? JSON.parse(rawBody) : {}; } catch (e) { body = {}; }
+  const result = await payments.handleWebhook(req.params.provider, { headers: req.headers, rawBody, body });
+  res.status(result.status === 401 ? 401 : result.ok ? 200 : 400).json(result);
+});
+
+// Legacy EcoCash endpoints kept so older clients keep working.
+app.post('/api/ecocash/deposit', async (req,res)=>{
+  const { phone, amount, userId } = req.body || {};
+  try {
+    const tx = await payments.requestDeposit({ userId, providerId: 'ecocash', amount, phone });
+    res.json({ success: true, transactionId: tx.providerRef, reference: tx.reference, status: tx.status, mock: payments.mode !== 'live', transaction: tx });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.post('/api/ecocash/withdraw', async (req,res)=>{
-  const { phone, amount, userId } = req.body;
-  if (!phone || !amount) return res.status(400).json({ error: 'Phone and amount required' });
+  const { phone, amount, userId } = req.body || {};
   try {
-    const result = await EcoCash.initiateB2C({ phone, amount, reference: `WD-${userId}-${Date.now()}` });
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const tx = await payments.requestWithdraw({ userId, providerId: 'ecocash', amount, phone });
+    res.json({ success: true, transactionId: tx.providerRef, reference: tx.reference, status: tx.status, mock: payments.mode !== 'live', transaction: tx });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-app.post('/api/ecocash/callback', (req,res)=>{
-  // This endpoint is called by EcoCash when transaction completes
-  console.log('📲 EcoCash callback received:', req.body);
-  const { reference, status, transactionId, phone, amount } = req.body;
-  // Parse userId from reference: DEP-userId-timestamp
-  if (reference && reference.startsWith('DEP-')) {
-    const parts = reference.split('-');
-    const userId = parts[1];
-    const user = users.get(userId) || usersData[userId];
-    if (user && status === 'COMPLETED') {
-      const amt = parseFloat(amount) || 0;
-      user.balance += amt;
-      addTransaction(userId, 'deposit', amt, 'completed', `EcoCash callback ${transactionId} ${phone}`);
-      io.to(userId).emit('balanceUpdate', { balance: user.balance });
-      io.to(userId).emit('transactionUpdate', user.transactions);
-      console.log(`✅ Deposit confirmed via callback: ${userId} +$${amt}`);
-    }
-  }
-  res.json({ success: true });
+app.post('/api/ecocash/callback', express.raw({ type: '*/*', limit: '256kb' }), async (req,res)=>{
+  const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body || '');
+  let body = {};
+  try { body = rawBody ? JSON.parse(rawBody) : {}; } catch (e) { body = {}; }
+  const result = await payments.handleWebhook('ecocash', { headers: req.headers, rawBody, body });
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 app.get('/api/ecocash/status', (req,res)=>{
-  res.json({ configured: !!EcoCash.apiKey, merchantCode: EcoCash.merchantCode ? 'SET' : 'NOT SET - USING MOCK', apiUrl: EcoCash.apiUrl, mockMode: !EcoCash.apiKey });
+  const eco = payments.getProvider('ecocash');
+  res.json({
+    mode: payments.mode,
+    configured: !!eco.live,
+    merchantCode: eco.merchantCode ? 'SET' : 'NOT SET - USING SANDBOX',
+    apiUrl: eco.baseUrl || 'sandbox',
+    mockMode: !eco.live,
+  });
+});
+
+// 6b. ENGINE API
+app.get('/api/engine/status', (req,res)=> res.json(engine.status()));
+
+app.post('/api/engine/analyse', async (req,res)=>{
+  const { fen, movetimeMs, multiPv } = req.body || {};
+  if (!fen) return res.status(400).json({ error: 'fen required' });
+  try {
+    const result = await engine.analyse({
+      fen,
+      movetimeMs: Math.min(2000, Number(movetimeMs) || 400),
+      multiPv: Math.min(3, Number(multiPv) || 1),
+    });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // 7. ADMIN API
@@ -512,8 +611,11 @@ app.get('/api/admin/data', (req,res)=>{
     jackpotPool,
     stats: statsData,
     transactions: transactionsLog.slice(0,100),
-    pendingWithdrawals,
-    ecocashStatus: { configured: !!EcoCash.apiKey, mock: !EcoCash.apiKey }
+    pendingWithdrawals: payments.store.pending().filter(t=> t.type==='withdraw'),
+    payments: payments.status(),
+    paymentTransactions: payments.store.recent(100),
+    engine: engine.status(),
+    ecocashStatus: { configured: !!payments.getProvider('ecocash').live, mock: !payments.getProvider('ecocash').live }
   });
 });
 
@@ -528,6 +630,17 @@ app.post('/api/admin/jackpot', (req,res)=>{
   res.json({ success:true, pool: jackpotPool });
 });
 
+app.post('/api/admin/payments/approve', async (req,res)=>{
+  const { password, reference, reject } = req.body || {};
+  if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const tx = await payments.approve(reference, { by: 'admin', reject: !!reject });
+    res.json({ success: true, transaction: tx });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post('/api/admin/withdraw/approve', (req,res)=>{
   const { password, withdrawalId } = req.body;
   if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
@@ -536,8 +649,6 @@ app.post('/api/admin/withdraw/approve', (req,res)=>{
   wd.status='approved';
   wd.approvedAt=new Date().toISOString();
   markDirty();
-  // In real, trigger EcoCash B2C here
-  EcoCash.initiateB2C({ phone: wd.phone || wd.accountDetails, amount: wd.amount, reference: `WD-APPROVED-${wd.id}` });
   res.json({ success:true, withdrawal: wd });
 });
 
@@ -590,7 +701,7 @@ io.on('connection', (socket)=>{
     if (phone) user.phone=phone;
     user.lastLogin=new Date().toISOString();
     markDirty();
-    socket.emit('registered', { userId: uid, user, difficultyConfig: DIFFICULTY_CONFIG, jackpotPool, leaderboard: leaderboard.slice(0,10) });
+    socket.emit('registered', { userId: uid, user, difficultyConfig: publicProfiles(), jackpotPool, leaderboard: leaderboard.slice(0,10), engine: engine.status(), payments: payments.status() });
     socket.emit('jackpotUpdate', { pool: jackpotPool });
   });
 
@@ -641,7 +752,7 @@ io.on('connection', (socket)=>{
     socketToUser.set(socket.id, uid);
     socket.join(uid);
     markDirty();
-    socket.emit('registered', { userId: uid, user, difficultyConfig: DIFFICULTY_CONFIG, jackpotPool });
+    socket.emit('registered', { userId: uid, user, difficultyConfig: publicProfiles(), jackpotPool, engine: engine.status(), payments: payments.status() });
     socket.emit('otpVerified', { userId: uid, phone, verified:true });
     cb && cb({ success:true, userId: uid, user });
   });
@@ -653,70 +764,71 @@ io.on('connection', (socket)=>{
     socket.emit('statsUpdate', user.stats);
   });
 
-  socket.on('deposit', async ({ userId, amount, phone }, cb)=>{
-    if (!userId || amount < MIN_BET) return cb && cb({ error: `Min $${MIN_BET}` });
-    const user=getUser(userId);
-    user.phone=phone;
-    const tx=addTransaction(userId, 'deposit', parseFloat(amount), 'pending', `EcoCash ${phone} - Initiating`);
-    socket.emit('transactionUpdate', user.transactions);
-    
+  socket.on('getPaymentProviders', (cb)=>{
+    const payload = { providers: payments.listProviders(), mode: payments.mode, transactions: payments.store.byUser(socketToUser.get(socket.id) || '') };
+    if (typeof cb === 'function') cb(payload); else socket.emit('paymentProviders', payload);
+  });
+
+  socket.on('deposit', async ({ userId, amount, phone, provider = 'ecocash', account }, cb)=>{
+    if (!userId) return cb && cb({ error: 'Login required' });
+    const user = getUser(userId);
+    if (phone) { user.phone = phone; markDirty(); }
     try {
-      const ecoResult = await EcoCash.initiateC2B({ phone, amount, reference: `DEP-${userId}-${Date.now()}` });
-      if (ecoResult.mock) {
-        // Mock: auto-complete after 2.2 sec
-        setTimeout(()=>{
-          user.balance+=parseFloat(amount);
-          tx.status='completed';
-          tx.details=`EcoCash ${phone} - Confirmed ${ecoResult.transactionId}`;
-          socket.emit('balanceUpdate', { balance:user.balance });
-          socket.emit('transactionUpdate', user.transactions);
-          markDirty();
-        }, 2200);
-        cb && cb({ success:true, transaction:tx, eco:ecoResult, message:`EcoCash prompt to ${phone} - confirm on phone` });
-      } else {
-        // Real: wait for callback
-        tx.details=`EcoCash ${phone} - Awaiting confirmation ${ecoResult.transactionId}`;
-        cb && cb({ success:true, transaction:tx, eco:ecoResult, message:'Awaiting EcoCash confirmation - check phone' });
-      }
-    } catch(e){
-      tx.status='failed';
-      tx.details=`EcoCash failed: ${e.message}`;
+      const tx = await payments.requestDeposit({
+        userId,
+        providerId: String(provider || 'ecocash').toLowerCase(),
+        amount: parseFloat(amount),
+        phone: phone || user.phone,
+        account,
+      });
+      markDirty();
+      cb && cb({ success: true, transaction: tx, message: tx.instructions || `Waiting for ${tx.provider} confirmation` });
+    } catch (e) {
       cb && cb({ error: e.message });
     }
   });
 
-  socket.on('withdraw', async ({ userId, amount, method, accountDetails }, cb)=>{
-    const user=getUser(userId);
-    if (user.balance < amount) return cb && cb({ error: 'Insufficient' });
-    user.balance-=parseFloat(amount);
-    const tx=addTransaction(userId, 'withdraw', -parseFloat(amount), 'pending', `${method}: ${accountDetails} - Awaiting approval`);
-    const wd={
-      id: tx.id,
-      userId,
-      username:user.username,
-      phone:user.phone,
-      amount: parseFloat(amount),
-      method,
-      accountDetails,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      transaction: tx
+  socket.on('withdraw', async ({ userId, amount, method, accountDetails, provider, phone, account }, cb)=>{
+    const PROVIDER_ALIASES = {
+      ecocash: 'ecocash', 'ecocash zw': 'ecocash', eco: 'ecocash',
+      innbucks: 'innbucks', innobucks: 'innbucks',
+      onemoney: 'onemoney', 'one money': 'onemoney', netone: 'onemoney',
+      bank: 'bank', zimswitch: 'bank',
+      agent: 'agent', cash: 'agent',
     };
-    pendingWithdrawals.unshift(wd);
-    markDirty();
-    socket.emit('balanceUpdate', { balance:user.balance });
-    socket.emit('transactionUpdate', user.transactions);
-    // In mock mode, auto-approve after 3 sec
-    if (!EcoCash.apiKey) {
-      setTimeout(()=>{
-        wd.status='approved';
-        tx.status='completed';
-        tx.details=`${method}: ${accountDetails} - Paid (Mock)`;
-        socket.emit('transactionUpdate', user.transactions);
-        markDirty();
-      }, 3000);
+    const requested = String(provider || method || 'ecocash').toLowerCase();
+    const providerId = PROVIDER_ALIASES[requested] || (payments.providers.has(requested) ? requested : 'ecocash');
+    const user = getUser(userId);
+    if (!user) return cb && cb({ error: 'Login required' });
+    if (Number(user.balance) < parseFloat(amount)) return cb && cb({ error: 'Insufficient balance' });
+
+    try {
+      const tx = await payments.requestWithdraw({
+        userId,
+        providerId,
+        amount: parseFloat(amount),
+        phone: phone || user.phone,
+        account: account || accountDetails,
+      });
+      const wd = {
+        id: tx.id,
+        reference: tx.reference,
+        userId,
+        username: user.username,
+        phone: tx.phone,
+        amount: tx.amount,
+        method: providerId,
+        accountDetails: tx.account,
+        status: tx.status,
+        createdAt: tx.createdAt,
+      };
+      pendingWithdrawals.unshift(wd);
+      if (pendingWithdrawals.length > 200) pendingWithdrawals.length = 200;
+      markDirty();
+      cb && cb({ success: true, transaction: tx, withdrawal: wd, message: tx.instructions });
+    } catch (e) {
+      cb && cb({ error: e.message });
     }
-    cb && cb({ success:true, transaction:tx, withdrawal: wd });
   });
 
   // BET MATCHMAKING
@@ -901,9 +1013,10 @@ io.on('connection', (socket)=>{
     const game=games.get(gameId);
     if (!game || (game.type!=='engine' && game.type!=='pvp_bet' && game.type!=='llm')) return cb && cb({ error:'Game not found' });
     if (game.type==='engine' && game.playerColor!==game.chessInstance.turn()) return cb && cb({ error:'Not your turn' });
+    const fenBefore = game.fen;
     try{
-      const move=game.chessInstance.move({ from,to, promotion:promotion||'q' });
-      if (!move) return cb && cb({ error:'Invalid' });
+      const move=safeMove(game.chessInstance, { from,to, promotion:promotion||'q' });
+      if (!move) return cb && cb({ error:'Illegal move' });
       game.fen=game.chessInstance.fen();
       game.moves.push(move);
       // Clock inc for player
@@ -916,58 +1029,52 @@ io.on('connection', (socket)=>{
       markDirty();
       if (game.chessInstance.isGameOver()){
         if (game.type==='engine') handleEngineOver(game, userId, socket);
-        else {
-          // pvp handled elsewhere
-        }
         stopClock(gameId);
-      } else {
-        if (game.type==='engine') {
-          socket.emit('moveMadeEngine', { game:sanitizeGame(game), move });
-          // Now engine's turn - generate server-side
-          setTimeout(()=> generateAndSendEngineMove(game, socket), 400 + Math.random()*400);
+      } else if (game.type==='engine') {
+        // Server is authoritative: it renders the human move, then plays the
+        // engine reply itself. Clients never send engine moves.
+        socket.emit('moveMadeEngine', { game:sanitizeGame(game), move });
+        if (!game.isFree) {
+          engine.queueMoveAnalysis({ fen: fenBefore, moveUci: from + to + (promotion && promotion !== 'q' ? promotion : '') });
         }
+        socket.emit('engineThinking', { gameId, difficulty: game.difficulty });
+        generateAndSendEngineMove(game, socket);
       }
       cb && cb({ success:true, fen:game.fen, move });
     }catch(e){ cb && cb({ error:e.message }); }
   });
 
-  function generateAndSendEngineMove(game, sock) {
-    if (game.status!=='playing') return;
-    const fen=game.fen;
-    const difficulty=game.difficulty;
-    const engineMove=getServerEngineMove(fen, difficulty);
-    if (!engineMove) {
-      // Game over?
-      if (game.chessInstance.isGameOver()) handleEngineOver(game, game.white.id!=='stockfish'?game.white.id:game.black.id, sock);
-      return;
-    }
-    try{
-      const move=game.chessInstance.move({ from:engineMove.from, to:engineMove.to, promotion:engineMove.promotion||'q' });
-      if (!move) return;
-      game.fen=game.chessInstance.fen();
-      game.moves.push(move);
-      game.lastMoveAt=Date.now();
-      markDirty();
-      if (game.chessInstance.isGameOver()){
-        const playerId=game.white.id!=='stockfish'?game.white.id:game.black.id;
-        handleEngineOver(game, playerId, sock);
-        stopClock(game.id);
-      } else {
-        const s = sock || io.to(game.id);
-        s.emit ? s.emit('moveMadeEngine', { game:sanitizeGame(game), move }) : io.to(game.id).emit('moveMadeEngine', { game:sanitizeGame(game), move });
-        // Clock continues
-      }
-    }catch(e){ console.error('Engine move err', e); }
-  }
-
-  // For old client that requests engine move
-  socket.on('requestEngineMove', ({ gameId, fen, difficulty }, cb)=>{
-    const game=games.get(gameId);
+  // Hint / analysis requests from the client (never applied to the game here -
+  // generateAndSendEngineMove owns that).
+  socket.on('requestEngineMove', async ({ gameId, fen, difficulty }, cb)=>{
+    const game = games.get(gameId);
     if (!game) return cb && cb({ error:'Game not found' });
-    const move=getServerEngineMove(fen||game.fen, difficulty||game.difficulty);
-    if (!move) return cb && cb({ error:'No move' });
-    cb && cb({ success:true, move: { from:move.from, to:move.to, promotion:move.promotion||'q' } });
-    // Also apply server side if needed? For now just return
+    try {
+      const res = await engine.getMove({
+        fen: fen || game.fen,
+        difficulty: difficulty || game.difficulty || 'medium',
+        allowCloud: false,
+      });
+      cb && cb({ success:true, move:{ from:res.from, to:res.to, promotion:res.promotion||'q' }, eval: res.eval, pv: res.pv, source: res.source });
+    } catch (e) {
+      cb && cb({ error: e.message });
+    }
+  });
+
+  // Live position analysis for the eval bar / analysis tab.
+  socket.on('analyse', async ({ fen, movetimeMs, multiPv }, cb)=>{
+    if (!fen) return cb && cb({ error: 'fen required' });
+    try {
+      const result = await engine.analyse({
+        fen,
+        movetimeMs: Math.min(1500, Number(movetimeMs) || 350),
+        multiPv: Math.min(3, Number(multiPv) || 1),
+      });
+      if (typeof cb === 'function') cb({ success: true, ...result });
+      else socket.emit('analysis', result);
+    } catch (e) {
+      cb && cb({ error: e.message });
+    }
   });
 
   socket.on('engineReply', ({ userId, gameId, from, to, promotion }, cb)=>{
@@ -1020,77 +1127,6 @@ io.on('connection', (socket)=>{
     cb && cb({ success:true });
   });
 
-  function handleEngineOver(game, userId, sock){
-    const isMate=game.chessInstance.isCheckmate();
-    const isDraw=game.chessInstance.isDraw()||game.chessInstance.isStalemate();
-    const turn=game.chessInstance.turn();
-    const user=getUser(userId);
-    let outcome='draw', payout=0, resultText='';
-    if (isMate){
-      const winnerColor=turn==='w'?'b':'w';
-      const playerWon=winnerColor===game.playerColor;
-      if (playerWon){
-        outcome='win';
-        if (!game.isFree){
-          const gross=game.bet*game.difficultyConfig.multiplier;
-          const fee=gross*PLATFORM_FEE;
-          payout=gross-fee;
-          let jackpotWin=0;
-          if (['master','grandmaster'].includes(game.difficulty) && Math.random()<0.15){
-            jackpotWin=jackpotPool*0.1;
-            payout+=jackpotWin;
-            jackpotPool-=jackpotWin;
-            user.stats.jackpotWins++;
-            addTransaction(userId, 'jackpot', jackpotWin, 'completed', `JACKPOT! 10% pool $${jackpotWin.toFixed(2)} vs ${game.difficultyConfig.label}`);
-          }
-          if (game.difficulty==='grandmaster'){
-            payout+=10;
-            user.rating+=50;
-            let entry=leaderboard.find(l=>l.userId===userId);
-            if (!entry){ entry={ userId, username:user.username, winsVsGM:0, earnings:0, highestWin:0, lastWin:null, rating:user.rating }; leaderboard.push(entry); }
-            entry.winsVsGM++;
-            entry.lastWin=new Date().toISOString();
-            updateLeaderboard(userId);
-            io.emit('leaderboardUpdate', { leaderboard:leaderboard.slice(0,10) });
-          }
-          user.balance+=payout;
-          statsData.totalPayouts+=payout; statsData.totalFees+=gross*PLATFORM_FEE;
-          user.stats.wins++; user.stats.engineWins++; user.stats.earned+=payout;
-          user.stats.highestWin=Math.max(user.stats.highestWin||0, payout);
-          addTransaction(userId, 'win', payout, 'completed', `Beat Stockfish ${game.difficultyConfig.label} Won $${payout.toFixed(2)} (${game.difficultyConfig.multiplier}x)`);
-          totalPayouts+=payout;
-        } else {
-          user.stats.freeGames++;
-        }
-        resultText=`You beat Stockfish ${game.difficultyConfig.label}! ${game.isFree?'':`+$${payout.toFixed(2)} ${payout>game.bet*game.difficultyConfig.multiplier?' + JACKPOT!':''}`}`;
-      } else {
-        outcome='loss';
-        user.stats.losses++;
-        if (!game.isFree){
-          jackpotPool+=game.bet*JACKPOT_CONTRIBUTION;
-          io.emit('jackpotUpdate', { pool:jackpotPool });
-          addTransaction(userId, 'loss', 0, 'completed', `Lost $${game.bet} vs ${game.difficultyConfig.label}. ${(game.bet*JACKPOT_CONTRIBUTION).toFixed(2)} to jackpot`);
-        }
-        resultText=`Stockfish ${game.difficultyConfig.label} checkmates you`;
-      }
-    } else if (isDraw){
-      outcome='draw'; resultText='Draw';
-      if (!game.isFree){
-        user.balance+=game.bet;
-        addTransaction(userId, 'refund', game.bet, 'completed', `Draw vs ${game.difficultyConfig.label} refund`);
-      }
-      user.stats.draws++;
-    }
-    game.status='finished'; game.result=resultText; game.winner=outcome==='win'?game.playerColor:outcome==='loss'?game.engineColor:'draw';
-    sock.emit('balanceUpdate', { balance:user.balance });
-    sock.emit('transactionUpdate', user.transactions);
-    sock.emit('statsUpdate', user.stats);
-    sock.emit('engineGameFinal', { game:sanitizeGame(game), result:resultText, outcome, payout, multiplier:game.difficultyConfig.multiplier, jackpotPool });
-    if (!game.isFree) sock.emit('jackpotUpdate', { pool:jackpotPool });
-    if (leaderboard.length) io.emit('leaderboardUpdate', { leaderboard:leaderboard.slice(0,10) });
-    markDirty();
-    stopClock(game.id);
-  }
 
   // LLM games
   socket.on('createLLMGame', ({ userId, bet, llmConfig, color, isFree }, cb)=>{
@@ -1306,7 +1342,11 @@ function sanitizeGame(game){
     pot: game.escrow || (game.bet?game.bet*2:0),
     isFree: game.isFree,
     difficulty: game.difficulty,
-    difficultyConfig: game.difficultyConfig,
+    difficultyConfig: game.difficultyConfig
+      ? { label: game.difficultyConfig.label, elo: game.difficultyConfig.elo, multiplier: game.difficultyConfig.multiplier, color: game.difficultyConfig.color, desc: game.difficultyConfig.desc }
+      : null,
+    lastEngine: game.lastEngine || null,
+    antiCheat: game.antiCheat || null,
     playerColor: game.playerColor,
     engineColor: game.engineColor,
     llmConfig: game.llmConfig,
@@ -1335,4 +1375,43 @@ app.get('/admin', (req,res)=>{
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', ()=> console.log(`♔ BetChess ZW Arena FULL running on ${PORT} | DB: ${Object.keys(usersData).length} users | Jackpot $${jackpotPool.toFixed(2)} | EcoCash ${EcoCash.apiKey?'LIVE':'MOCK'}`));
+const HOST = process.env.HOST || '0.0.0.0';
+
+function persistNow(){
+  saveJSON('users.json', usersData);
+  saveJSON('leaderboard.json', leaderboard);
+  saveJSON('jackpot.json', { pool: jackpotPool });
+  saveJSON('transactions.json', transactionsLog.slice(0, 500));
+  saveJSON('withdrawals.json', pendingWithdrawals.slice(0, 200));
+  saveJSON('stats.json', statsData);
+  saveJSON('payments.json', payments.store.toJSON());
+}
+
+async function boot(){
+  await engine.init();
+  payments.startPolling();
+
+  server.listen(PORT, HOST, ()=>{
+    const eco = payments.getProvider('ecocash');
+    console.log(`♔ BetChess ZW running on http://${HOST}:${PORT}`);
+    console.log(`   engine   : ${engine.uci ? `Lichess Stockfish 18 (${engine.variant})` : 'JS fallback engine'}${engine.uci ? '' : ' - wasm unavailable'}`);
+    console.log(`   lichess  : cloud eval ${engine.cloud.available ? 'enabled' : 'disabled'}`);
+    console.log(`   payments : ${payments.mode.toUpperCase()} mode - EcoCash ${eco.live ? 'LIVE' : 'SANDBOX'} (${payments.listProviders().length} methods)`);
+    console.log(`   db       : ${Object.keys(usersData).length} users | Jackpot $${jackpotPool.toFixed(2)}`);
+  });
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, ()=>{
+    console.log(`\n${signal} received - saving state...`);
+    persistNow();
+    engine.shutdown();
+    payments.stopPolling();
+    process.exit(0);
+  });
+}
+
+boot().catch(err=>{
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});

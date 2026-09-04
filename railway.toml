@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm ci && node scripts/vendor-assets.mjs"
+
+[deploy]
+startCommand = "node server.js"
+healthcheckPath = "/api/config"
+healthcheckTimeout = 60
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

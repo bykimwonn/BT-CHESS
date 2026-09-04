@@ -59,4 +59,12 @@ report.push(
     : 'stockfish -> NOT FOUND (run npm install)'
 );
 
+// 3. Generated SVG chess piece set -> public/pieces/
+try {
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'make-pieces.mjs')], { stdio: 'inherit' });
+} catch (e) {
+  report.push('pieces   -> skipped (' + e.message + ')');
+}
+
 console.log('[vendor] ' + report.join('\n[vendor] '));

@@ -1,11 +1,10 @@
 // chess.js is loaded by a <script type="module"> in index.html, which runs
-// before this deferred classic script. If it is missing, say so loudly instead
-// of failing with a cryptic ReferenceError further down.
+// before this deferred classic script. If it is missing, say so loudly.
 if (typeof Chess === 'undefined') {
   console.error('[BetChess] chess.js failed to load from /vendor/chess.js - run `npm run vendor`');
-  document.addEventListener('DOMContentLoaded', ()=>{
-    const el=document.getElementById('board');
-    if (el) el.innerHTML='<div style="padding:20px;color:#ff6b6b;font-family:Inter,sans-serif">chess.js failed to load.<br>Run <code>npm install &amp;&amp; npm run vendor</code> and reload.</div>';
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('board');
+    if (el) el.innerHTML = '<div class="game-overlay">chess.js failed to load.<br>Run <code>npm install &amp;&amp; npm run vendor</code> and reload.</div>';
   });
 }
 
@@ -16,480 +15,639 @@ let user = null;
 
 let chess = new Chess();
 let currentGame = null;
-let currentMode = 'stockfish';
+let currentMode = 'engine';
 let boardOrientation = 'white';
 let selectedSquare = null;
 let legalMoves = [];
 let hintMove = null;
+let isSpectator = false;
 
 let difficultyConfig = {};
-let jackpotPool = 1250;
+let jackpotPool = 0;
 let leaderboard = [];
 let selectedDifficulty = 'medium';
-let selectedFreeDifficulty = 'medium';
 let isSearchingMatch = false;
 let currentSearchBet = null;
+let lastRatingDelta = null;
+let lobbies = [];
 
-// Stockfish
-let stockfish = null;
-let currentEval = { score: 0.3, text: '+0.3 White better', depth: 0 };
+// Stockfish analysis (browser worker with server fallback)
+let engineClient = null;
+let evalThrottleTimer = null;
+let currentEval = { score: 0, text: '0.0 — equal position', depth: 0, pv: '' };
 let analysisEnabled = true;
+
+// Puzzles
 let currentPuzzle = null;
 let puzzleChess = new Chess();
+let puzzleSelected = null;
+let puzzleLegal = [];
 
-// LLM
-let llmGameMode = false;
-let llmCommentaryHistory = [];
-
-const pieceUnicode = {
-  'wK':'♔','wQ':'♕','wR':'♖','wB':'♗','wN':'♘','wP':'♙',
-  'bK':'♚','bQ':'♛','bR':'♜','bB':'♝','bN':'♞','bP':'♟'
-};
-
-// Init user
 if (!username) {
-  username = 'Player_' + Math.floor(Math.random()*9000+1000);
+  username = 'Player_' + Math.floor(Math.random() * 9000 + 1000);
   localStorage.setItem('chessUsername', username);
 }
 
-socket.on('connect', ()=> socket.emit('register', { userId, username }));
+// ============ BOARD THEMES ============
+const BOARD_THEMES = [
+  { id: 'classic', label: 'Classic',  light: '#ebecd0', dark: '#739552', frame: 'rgba(15,23,42,0.7)' },
+  { id: 'walnut',  label: 'Walnut',   light: '#ead7c3', dark: '#a0714f', frame: 'rgba(35,22,14,0.75)' },
+  { id: 'ocean',   label: 'Ocean',    light: '#dde7f0', dark: '#4e6e8e', frame: 'rgba(12,26,42,0.75)' },
+  { id: 'carbon',  label: 'Carbon',   light: '#3d4759', dark: '#222b3a', frame: 'rgba(8,12,20,0.8)' },
+  { id: 'royal',   label: 'Royal',    light: '#e7def0', dark: '#7d6ba8', frame: 'rgba(24,18,40,0.75)' },
+];
+let boardTheme = localStorage.getItem('boardTheme') || 'classic';
 
-socket.on('registered', ({ userId: uid, user: u, difficultyConfig: cfg, jackpotPool: jp, leaderboard: lb })=>{
+function applyBoardTheme() {
+  const t = BOARD_THEMES.find((x) => x.id === boardTheme) || BOARD_THEMES[0];
+  document.querySelectorAll('.chess-board').forEach((b) => {
+    b.dataset.theme = t.id;
+    b.style.setProperty('--sq-light', t.light);
+    b.style.setProperty('--sq-dark', t.dark);
+  });
+  document.querySelectorAll('.board-frame').forEach((f) => {
+    f.style.setProperty('--board-frame', t.frame);
+    f.style.background = t.frame;
+  });
+}
+function cycleBoardTheme() {
+  const i = BOARD_THEMES.findIndex((x) => x.id === boardTheme);
+  boardTheme = BOARD_THEMES[(i + 1) % BOARD_THEMES].id;
+  localStorage.setItem('boardTheme', boardTheme);
+  applyBoardTheme();
+  toast(`Board: ${BOARD_THEMES.find((x) => x.id === boardTheme).label}`, 'info');
+}
+
+// ============ PIECES ============
+const pieceSrc = (color, type) => `/pieces/${color}${type.toUpperCase()}.svg`;
+
+// ============ SOCKET LIFECYCLE ============
+socket.on('connect', () => socket.emit('register', { userId, username }));
+
+socket.on('registered', ({ userId: uid, user: u, difficultyConfig: cfg, jackpotPool: jp, leaderboard: lb }) => {
   userId = uid;
   user = u;
   if (cfg) difficultyConfig = cfg;
-  if (jp) jackpotPool = jp;
+  if (jp != null) jackpotPool = jp;
   if (lb) leaderboard = lb;
   localStorage.setItem('chessUserId', uid);
-  document.getElementById('userIdDisplay').value = uid;
-  document.getElementById('usernameInput').value = u.username;
-  document.getElementById('headerAvatar').textContent = u.username[0].toUpperCase();
-  document.getElementById('whiteName').textContent = u.username + ' (You)';
-  document.getElementById('whiteAvatar').textContent = u.username[0].toUpperCase();
+  const $ = (id) => document.getElementById(id);
+  $('userIdDisplay').value = uid;
+  $('usernameInput').value = u.username;
+  $('headerAvatar').textContent = u.username[0].toUpperCase();
+  $('whiteAvatar').textContent = u.username[0].toUpperCase();
+  $('whiteName').firstChild.textContent = u.username + ' ';
   updateBalance(u.balance);
   updateTransactions(u.transactions || []);
-  updateStats(u.stats||{});
+  updateStats(u.stats || {});
+  updateRatingUI();
   renderDifficultyGrids();
   updateBetCalculation();
   updateJackpot();
   renderMiniLeaderboard();
-  document.getElementById('engineStatus')?.textContent || null;
+  applyBoardTheme();
+  coachGreet(u);
+  // Deep-link: invite link (?invite=) or spectator link (?game=)
+  handleUrlInvite();
 });
 
-socket.on('balanceUpdate', ({ balance })=> { if (user) user.balance=balance; updateBalance(balance); });
-socket.on('transactionUpdate', (txs)=> updateTransactions(txs));
-socket.on('statsUpdate', (stats)=> updateStats(stats));
-socket.on('jackpotUpdate', ({ pool })=> { jackpotPool=pool; updateJackpot(); });
-socket.on('leaderboardUpdate', ({ leaderboard: lb })=> { leaderboard=lb; renderMiniLeaderboard(); renderFullLeaderboard(); });
-
-// Payment lifecycle updates straight from the server
-socket.on('paymentUpdate', (tx)=>{
-  if (!tx) return;
-  updateTransactions(user && user.transactions ? user.transactions : []);
-  const status=document.getElementById('depositStatus');
-  if (status && ['completed','failed','expired','rejected','cancelled'].includes(tx.status)){
-    toast(`${tx.type === 'deposit' ? 'Deposit' : 'Withdrawal'} ${tx.status} • $${Number(tx.amount).toFixed(2)}`, tx.status==='completed'?'success':'error');
-    if (tx.status==='completed') socket.emit('getBalance', { userId });
+socket.on('balanceUpdate', ({ balance }) => { if (user) user.balance = balance; updateBalance(balance); });
+socket.on('transactionUpdate', (txs) => updateTransactions(txs));
+socket.on('statsUpdate', (stats) => { updateStats(stats); updateRatingUI(); });
+socket.on('jackpotUpdate', ({ pool }) => { jackpotPool = pool; updateJackpot(); });
+socket.on('leaderboardUpdate', ({ leaderboard: lb }) => { leaderboard = lb || []; renderMiniLeaderboard(); renderFullLeaderboard(); });
+socket.on('ratingUpdate', ({ rating, delta, ratedGames }) => {
+  if (!user) return;
+  user.rating = rating;
+  user.stats = user.stats || {};
+  user.stats.rating = rating;
+  user.stats.ratedGames = ratedGames;
+  lastRatingDelta = delta;
+  updateRatingUI();
+  if (delta !== 0) {
+    toast(`Rating ${delta > 0 ? '+' : ''}${delta} → ${rating}${ratedGames < 25 ? '?' : ''}`, delta > 0 ? 'success' : delta < 0 ? 'error' : 'info');
   }
 });
-socket.on('paymentProviders', ({ providers })=>{ if (providers) paymentProviders = providers.filter(p=>p.id!=='mock'); });
 
-// Matchmaking events
-socket.on('searchingMatch', ({ bet, queuePosition, message })=>{
-  isSearchingMatch=true;
-  currentSearchBet=bet;
-  document.getElementById('searchStatus').style.display='flex';
-  document.getElementById('searchText').textContent = message;
-  document.getElementById('searchSub').textContent = `Pos ${queuePosition} in $${bet} queue • Finding opponent...`;
-  document.getElementById('findMatchBtn').disabled=true;
+socket.on('paymentUpdate', (tx) => {
+  if (!tx) return;
+  updateTransactions(user && user.transactions ? user.transactions : []);
+  if (['completed', 'failed', 'expired', 'rejected', 'cancelled'].includes(tx.status)) {
+    toast(`${tx.type === 'deposit' ? 'Deposit' : 'Withdrawal'} ${tx.status} · $${Number(tx.amount).toFixed(2)}`, tx.status === 'completed' ? 'success' : 'error');
+    if (tx.status === 'completed') socket.emit('getBalance', { userId });
+  }
 });
+socket.on('paymentProviders', ({ providers }) => { if (providers) paymentProviders = providers.filter((p) => p.id !== 'mock'); });
 
-socket.on('matchFound', ({ game, opponent })=>{
-  isSearchingMatch=false;
-  document.getElementById('searchStatus').style.display='none';
-  document.getElementById('findMatchBtn').disabled=false;
-  toast(`Matched vs ${opponent}! Pot $${(game.bet*2).toFixed(2)} - GL!`, 'success');
-  currentGame = game;
-  chess.load(game.fen);
-  boardOrientation = game.white.id===userId ? 'white' : 'black';
-  selectedSquare=null; legalMoves=[];
-  renderBoard();
-  renderGameInfo();
-  renderMoves();
+// ============ MATCHMAKING (quick match) ============
+socket.on('searchingMatch', ({ bet, queuePosition, message }) => {
+  isSearchingMatch = true;
+  currentSearchBet = bet;
+  document.getElementById('searchStatus').style.display = 'flex';
+  document.getElementById('searchText').textContent = message;
+  document.getElementById('findMatchBtn').disabled = true;
+  refreshLiveStats(bet, queuePosition);
+});
+socket.on('matchFound', ({ game, opponent }) => {
+  isSearchingMatch = false;
+  document.getElementById('searchStatus').style.display = 'none';
+  document.getElementById('findMatchBtn').disabled = false;
+  toast(`Matched vs ${opponent} — good luck!`, 'success');
+  enterGame(game);
   switchRightTab('game');
 });
-
-socket.on('noMatchFound', ({ bet, suggestion })=>{
-  document.getElementById('searchSub').textContent = suggestion;
-  setTimeout(()=>{ if (isSearchingMatch) cancelSearch(); }, 4000);
+socket.on('noMatchFound', ({ suggestion }) => {
+  document.getElementById('searchSub').textContent = suggestion || 'No opponent at this stake yet — try the engine or a friend invite.';
 });
-
-socket.on('searchCancelled', ()=>{
-  isSearchingMatch=false;
-  currentSearchBet=null;
-  document.getElementById('searchStatus').style.display='none';
-  document.getElementById('findMatchBtn').disabled=false;
+socket.on('searchCancelled', () => {
+  isSearchingMatch = false;
+  currentSearchBet = null;
+  document.getElementById('searchStatus').style.display = 'none';
+  document.getElementById('findMatchBtn').disabled = false;
 });
-
-socket.on('gameStarted', ({ game })=>{
-  currentGame=game;
+socket.on('gameStarted', ({ game }) => enterGame(game));
+socket.on('moveMadePvp', ({ game, move }) => {
+  currentGame = game;
   chess.load(game.fen);
-  boardOrientation = game.white.id===userId ? 'white':'black';
-  renderBoard(); renderGameInfo(); renderMoves();
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
+  const who = game.moves.length % 2 === 1 ? game.white.username : game.black.username;
+  addChatMsg(`${who} played ${move.san}`, 'system');
 });
-
-socket.on('moveMadePvp', ({ game, move })=>{
-  currentGame=game;
+socket.on('gameOverPvp', ({ game }) => {
+  currentGame = game;
   chess.load(game.fen);
-  renderBoard(); renderGameInfo(); renderMoves();
-  addChatMsg(`${game.moves.length % 2===1 ? game.white.username : game.black.username} played ${move.san}`, 'system');
-});
-
-socket.on('gameOverPvp', ({ game })=>{
-  currentGame=game;
-  chess.load(game.fen);
-  renderBoard(); renderGameInfo();
+  renderBoard(); renderGameInfo(); syncTurnBars();
   showGameOverPvp(game);
 });
 
-// Engine events
-socket.on('engineGameCreated', ({ game })=>{
-  currentGame=game;
+// ============ FRIEND INVITES ============
+socket.on('lobbyUpdate', ({ lobbies: list }) => {
+  lobbies = list || [];
+  renderLobby();
+});
+socket.on('friendGameStarted', ({ game, opponent }) => {
+  toast(`Friend game started vs ${opponent}`, 'success');
+  closeModal('shareModal');
+  enterGame(game);
+  switchRightTab('game');
+});
+socket.on('inviteCancelled', () => renderLobby());
+
+// Draw offers
+socket.on('drawOffered', ({ by }) => {
+  if (isSpectator) return;
+  const accept = window.confirm(`${by} offers a draw. Accept?`);
+  socket.emit('respondDraw', { userId, gameId: currentGame?.id, accept });
+});
+socket.on('drawDeclined', ({ by }) => toast(`${by} declined the draw`, 'info'));
+
+// ============ ENGINE GAMES ============
+socket.on('engineGameCreated', ({ game }) => {
+  currentGame = game;
+  isSpectator = false;
   chess.load(game.fen);
   boardOrientation = game.playerColor === 'w' ? 'white' : 'black';
-  const colorSel = document.getElementById('playerColor')?.value;
-  if (colorSel === 'random') boardOrientation = Math.random()>0.5?'white':'black';
-  if (game.playerColor) boardOrientation = game.playerColor==='w'?'white':'black';
-  selectedSquare=null; legalMoves=[]; hintMove=null;
-  renderBoard(); renderGameInfo(); renderMoves();
-  toast(`vs Stockfish ${game.difficultyConfig.label} started! ${game.isFree?'Free':'Bet $'+game.bet}`, 'success');
-  // The server plays the engine's moves - no client-side engine moves any more.
+  selectedSquare = null; legalMoves = []; hintMove = null;
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
+  toast(`vs ${game.difficultyConfig?.label || 'engine'} started — ${game.isFree ? 'free practice' : 'stake $' + game.bet}`, 'success');
   if (game.turn !== game.playerColor) showEngineThinking(game.difficultyConfig?.label);
-  if (currentMode!=='bet') requestEvaluation(game.fen);
+  requestEvaluation(game.fen);
 });
-
-socket.on('moveMadeEngine', ({ game })=>{
-  currentGame=game;
+socket.on('moveMadeEngine', ({ game, engine: eng }) => {
+  currentGame = game;
   chess.load(game.fen);
   hideEngineThinking();
-  renderBoard(); renderGameInfo(); renderMoves();
-  if (currentMode!=='bet') requestEvaluation(game.fen);
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
+  if (eng?.depth) document.getElementById('engineDepth').textContent = `depth ${eng.depth}`;
+  requestEvaluation(game.fen);
 });
+socket.on('engineThinking', ({ difficulty }) => showEngineThinking(difficulty));
 
-socket.on('engineThinking', ({ difficulty })=> showEngineThinking(difficulty));
-
-function showEngineThinking(label){
-  const el=document.getElementById('engineThinking');
+function showEngineThinking(label) {
+  const el = document.getElementById('engineThinking');
   if (!el) return;
-  el.style.display='flex';
-  const t=el.querySelector('#thinkingText');
-  if (t) t.textContent=`Stockfish ${label ? (label+' ') : ''}thinking…`;
+  el.style.display = 'flex';
+  const t = el.querySelector('#thinkingText');
+  if (t) t.textContent = `${label || 'Engine'} thinking…`;
 }
-function hideEngineThinking(){
-  const el=document.getElementById('engineThinking');
-  if (el) el.style.display='none';
-}
+function hideEngineThinking() { const el = document.getElementById('engineThinking'); if (el) el.style.display = 'none'; }
 
-socket.on('engineGameFinal', (data)=>{
-  currentGame=data.game;
-  renderBoard(); renderGameInfo(); renderMoves();
+socket.on('engineGameFinal', (data) => {
+  currentGame = data.game;
+  chess.load(data.game.fen);
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
   showEngineOver(data.result, data.outcome, data.payout, data.multiplier, data.game);
 });
 
-// LLM events
-socket.on('llmGameCreated', ({ game })=>{
-  currentGame=game;
+// ============ SPECTATING ============
+socket.on('spectating', ({ game, spectators }) => {
+  isSpectator = true;
+  currentGame = game;
   chess.load(game.fen);
-  boardOrientation = game.playerColor==='w'?'white':'black';
-  renderBoard(); renderGameInfo(); renderMoves();
-  toast(`LLM Arena vs ${game.llmConfig?.model||'AI'} started!`, 'success');
-  llmGameMode=true;
-  addCommentary(`🤖 LLM ${game.llmConfig?.model||'Agent'}: "Good luck! I'm ready. FEN: ${game.fen.split(' ')[0]}..."`, 'llm');
-  if (game.turn !== game.playerColor) setTimeout(()=> requestLLMMove(game.fen, game), 800);
+  boardOrientation = 'white';
+  selectedSquare = null; legalMoves = [];
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
+  document.getElementById('blackStatus').textContent = `Spectating · ${spectators} watching`;
+  document.getElementById('whiteStatus').textContent = 'Live broadcast';
+  toast(`Spectating ${game.id}`, 'info');
+});
+socket.on('spectatorJoined', ({ count }) => {
+  const el = document.getElementById('blackStatus');
+  if (el && currentGame) el.textContent = `${count} spectators watching · live`;
+});
+socket.on('chatMessage', ({ username: u, message }) => addChatMsg(`${u}: ${message}`, 'user'));
+
+// ============ CLOCKS ============
+socket.on('clockUpdate', ({ clocks, turn }) => {
+  const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+  const w = document.getElementById('whiteTimer');
+  const b = document.getElementById('blackTimer');
+  if (w && clocks.w != null) {
+    w.textContent = fmt(clocks.w);
+    w.classList.toggle('low', clocks.w <= 30);
+    w.classList.toggle('active', turn === 'w');
+  }
+  if (b && clocks.b != null) {
+    b.textContent = fmt(clocks.b);
+    b.classList.toggle('low', clocks.b <= 30);
+    b.classList.toggle('active', turn === 'b');
+  }
 });
 
-socket.on('llmTurn', ({ fen, moves, history })=>{
-  // It's LLM's turn after human move
-  requestLLMMove(fen, currentGame);
-});
-
-socket.on('llmGameOver', ({ game })=>{
-  currentGame=game;
-  renderGameInfo();
-  showGameOverPvp(game);
-});
-
-// ========= UI HELPERS =========
-function updateBalance(b){
-  document.getElementById('balanceDisplay').textContent = `$${b.toFixed(2)}`;
-  document.getElementById('availableBalance').textContent = `$${b.toFixed(2)}`;
+// ============ UI HELPERS ============
+function enterGame(game) {
+  currentGame = game;
+  isSpectator = false;
+  chess.load(game.fen);
+  const myColor = game.playerColor || (game.white && game.white.id === userId ? 'w' : 'b');
+  boardOrientation = myColor === 'w' ? 'white' : 'black';
+  selectedSquare = null; legalMoves = []; hintMove = null;
+  renderBoard(); renderGameInfo(); renderMoves(); syncTurnBars();
 }
-function updateTransactions(txs){
+
+function myColorIn(game) {
+  if (!game) return null;
+  if (game.playerColor) return game.playerColor;
+  if (game.white?.id === userId) return 'w';
+  if (game.black?.id === userId) return 'b';
+  return null;
+}
+
+function syncTurnBars() {
+  const wBar = document.getElementById('whiteBar');
+  const bBar = document.getElementById('blackBar');
+  if (!currentGame) { wBar?.classList.remove('turn'); bBar?.classList.remove('turn'); return; }
+  const turn = chess.turn();
+  wBar.classList.toggle('turn', turn === 'w' && currentGame.status === 'playing');
+  bBar.classList.toggle('turn', turn === 'b' && currentGame.status === 'playing');
+  // ratings in bars
+  const myR = document.getElementById('myRating');
+  const opR = document.getElementById('blackRating');
+  if (myR && user?.rating != null) {
+    myR.style.display = '';
+    myR.textContent = `${Math.round(user.rating)}${(user.stats?.ratedGames ?? 0) < 25 ? '?' : ''}`;
+  }
+  const opp = currentGame.white?.id === userId ? currentGame.black : currentGame.white;
+  if (opR) {
+    if (opp?.rating != null && opp.id !== 'stockfish') {
+      opR.style.display = '';
+      opR.textContent = Math.round(opp.rating);
+    } else if (opp?.id === 'stockfish' || /stockfish/i.test(opp?.username || '')) {
+      opR.style.display = '';
+      opR.textContent = currentGame.difficultyConfig?.elo || 'engine';
+    } else {
+      opR.style.display = 'none';
+    }
+  }
+}
+
+function updateBalance(b) {
+  document.getElementById('balanceDisplay').textContent = `$${Number(b).toFixed(2)}`;
+  const ab = document.getElementById('availableBalance');
+  if (ab) ab.textContent = `$${Number(b).toFixed(2)}`;
+}
+function updateTransactions(txs) {
   if (!txs) return;
-  let earned=0, puzzles=0;
-  txs.forEach(t=>{ if(t.type==='win') earned+=t.amount; });
-  const mini = txs.slice(0,5).map(tx=>txHTML(tx)).join('') || '<div class="empty-state">No tx yet</div>';
+  let earned = 0;
+  txs.forEach((t) => { if (t.type === 'win' || t.type === 'jackpot') earned += t.amount; });
+  const mini = txs.slice(0, 6).map(txHTML).join('') || '<div class="empty-state">No transactions yet</div>';
   document.getElementById('txListMini').innerHTML = mini;
   document.getElementById('totalWon').textContent = `$${earned.toFixed(2)}`;
 }
-function updateStats(stats){
+function updateStats(stats) {
   if (!stats) return;
-  document.getElementById('puzzlesSolved').textContent = stats.puzzlesSolved||0;
-  document.getElementById('puzzlesSolvedPage').textContent = stats.puzzlesSolved||0;
+  document.getElementById('puzzlesSolved').textContent = stats.puzzlesSolved || 0;
+  const pp = document.getElementById('puzzlesSolvedPage');
+  if (pp) pp.textContent = stats.puzzlesSolved || 0;
+  const rec = document.getElementById('statRecord');
+  if (rec) rec.textContent = `${stats.wins || 0}–${stats.losses || 0}–${stats.draws || 0}`;
+  const pr = document.getElementById('puzzleRatingStat');
+  if (pr) pr.textContent = stats.puzzleRating || 1200;
 }
-function txHTML(tx){
-  const pos=tx.amount>0;
-  const icons={deposit:'💳',withdraw:'🏦',win:'🏆',bet:'⚔️',fee:'💼',refund:'↩️',loss:'💸',jackpot:'🎰',puzzle:'🧩'}[tx.type]||'💰';
-  return `<div class="tx-item"><div class="tx-left"><div class="tx-type">${icons} ${tx.type} <span class="tx-status ${tx.status}">${tx.status}</span></div><div class="tx-detail">${tx.details} • ${new Date(tx.timestamp).toLocaleTimeString()}</div></div><div class="tx-amount ${pos?'positive':'negative'}">${pos?'+':''}$${tx.amount.toFixed(2)}</div></div>`;
+function updateRatingUI() {
+  const r = Math.round(user?.rating ?? 1200);
+  const prov = (user?.stats?.ratedGames ?? 0) < 25;
+  const txt = `${r}${prov ? '?' : ''}`;
+  const el = document.getElementById('statRating');
+  if (el) el.textContent = txt;
+  const pr = document.getElementById('profileRating');
+  if (pr) pr.value = `${txt} · ${user?.stats?.ratedGames || 0} rated games`;
+  syncTurnBars();
 }
-function updateJackpot(){
-  document.getElementById('jackpotPill').textContent = `🎰 Jackpot $${jackpotPool.toFixed(2)}`;
+function txHTML(tx) {
+  const pos = tx.amount > 0;
+  const icons = { deposit: '💳', withdraw: '🏦', win: '🏆', bet: '⚔️', fee: '💼', refund: '↩️', loss: '💸', jackpot: '🎰', puzzle: '🧩' }[tx.type] || '💰';
+  return `<div class="tx-item"><div style="min-width:0"><div class="tx-type">${icons} ${tx.type} <span class="tx-status ${tx.status}">${tx.status}</span></div><div class="tx-detail">${tx.details || ''} · ${new Date(tx.timestamp).toLocaleTimeString()}</div></div><div class="tx-amount ${pos ? 'positive' : 'negative'}">${pos ? '+' : ''}$${Math.abs(tx.amount).toFixed(2)}</div></div>`;
+}
+function updateJackpot() {
+  document.getElementById('jackpotPill').textContent = `🎰 Jackpot $${Number(jackpotPool).toFixed(0)}`;
   const jf = document.getElementById('jackpotFull');
-  if (jf) jf.textContent = `$${jackpotPool.toFixed(2)}`;
-}
-function switchLeftTab(tab){
-  currentMode=tab;
-  document.querySelectorAll('.left-tab').forEach(t=> t.classList.toggle('active', t.dataset.tab===tab));
-  document.querySelectorAll('.left-tab-content').forEach(c=> c.classList.toggle('active', c.id === `tab-${tab}`));
-}
-function switchRightTab(tab){
-  document.querySelectorAll('.right-tab').forEach(t=> t.classList.toggle('active', t.dataset.rtab===tab));
-  document.querySelectorAll('.right-tab-content').forEach(c=> c.classList.toggle('active', c.id === `rtab-${tab}`));
-}
-function switchPage(page){
-  document.querySelectorAll('.page-overlay').forEach(p=> p.style.display='none');
-  if (page==='play') {
-    document.querySelectorAll('.page-overlay').forEach(p=> p.style.display='none');
-  } else {
-    const el = document.getElementById(`page-${page}`);
-    if (el) el.style.display='block';
-    if (page==='puzzles' && !currentPuzzle) nextPuzzle();
-    if (page==='leaderboard') renderFullLeaderboard();
-  }
-  // update nav
-  document.querySelectorAll('.nav-link').forEach(n=> n.classList.toggle('active', n.dataset.page===page));
-}
-function onProviderChange(){
-  const prov = document.getElementById('llmProvider').value;
-  document.getElementById('apiKeyGroup').style.display = prov==='fallback' ? 'none' : 'flex';
+  if (jf) jf.textContent = `$${Number(jackpotPool).toFixed(2)}`;
 }
 
-// Bet slider
-document.getElementById('quickBetSlider')?.addEventListener('input', (e)=>{
+function switchLeftTab(tab) {
+  currentMode = tab;
+  document.querySelectorAll('.left-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.left-tab-content').forEach((c) => c.classList.toggle('active', c.id === `tab-${tab}`));
+}
+function switchRightTab(tab) {
+  document.querySelectorAll('.right-tab').forEach((t) => t.classList.toggle('active', t.dataset.rtab === tab));
+  document.querySelectorAll('.right-tab-content').forEach((c) => c.classList.toggle('active', c.id === `rtab-${tab}`));
+}
+function switchPage(page) {
+  document.querySelectorAll('.page-overlay').forEach((p) => (p.style.display = 'none'));
+  if (page !== 'play') {
+    const el = document.getElementById(`page-${page}`);
+    if (el) el.style.display = 'block';
+    if (page === 'puzzles' && !currentPuzzle) nextPuzzle();
+    if (page === 'leaderboard') renderFullLeaderboard();
+  }
+  document.querySelectorAll('.nav-link').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
+}
+
+// ============ BET SLIDER / DIFFICULTY ============
+document.getElementById('quickBetSlider')?.addEventListener('input', (e) => {
   const v = parseFloat(e.target.value);
-  document.getElementById('quickBetLabel').textContent = `$${v.toFixed(2)}`;
+  document.getElementById('quickBetLabel').textContent = v === 0 ? 'Free' : `$${v.toFixed(2)}`;
   document.getElementById('findBetAmount').textContent = v.toFixed(2);
-  // sync other bet inputs
   document.getElementById('betAmount').value = v.toFixed(2);
   document.getElementById('customBet').value = v.toFixed(2);
   updateBetCalculation();
 });
-function updateBetCalculation(){
-  const bet = parseFloat(document.getElementById('betAmount').value)||0;
-  const cfg = difficultyConfig[selectedDifficulty] || { multiplier:2.5, label:'Medium' };
-  const gross = bet*cfg.multiplier;
-  const win = gross*0.9;
-  document.getElementById('betDisplay').textContent=`$${bet.toFixed(2)}`;
-  document.getElementById('multDisplay').textContent=`${cfg.multiplier}x`;
-  document.getElementById('winDisplay').textContent=`$${win.toFixed(2)}`;
-  document.getElementById('payoutBadge').textContent=`Win ${cfg.multiplier}x`;
-  document.getElementById('liveMult').textContent=`${cfg.multiplier}x`;
-  document.getElementById('liveWin').textContent=`$${win.toFixed(2)}`;
-  document.getElementById('potDisplay').textContent=`$${bet.toFixed(2)}`;
-  document.getElementById('potSub').textContent=`Win $${win.toFixed(2)} vs ${cfg.label}`;
+function updateBetCalculation() {
+  const bet = parseFloat(document.getElementById('betAmount').value) || 0;
+  const cfg = difficultyConfig[selectedDifficulty] || { multiplier: 2.5, label: 'Medium' };
+  const gross = bet * cfg.multiplier;
+  const win = gross * 0.9;
+  document.getElementById('betDisplay').textContent = `$${bet.toFixed(2)}`;
+  document.getElementById('multDisplay').textContent = `${cfg.multiplier}×`;
+  document.getElementById('winDisplay').textContent = `$${win.toFixed(2)}`;
+  document.getElementById('payoutBadge').textContent = `Win ${cfg.multiplier}×`;
+  document.getElementById('liveMult').textContent = bet > 0 ? `${cfg.multiplier}×` : 'free';
+  document.getElementById('liveWin').textContent = `$${win.toFixed(2)}`;
+  document.getElementById('potDisplay').textContent = bet > 0 ? `$${bet.toFixed(2)}` : 'FREE';
+  document.getElementById('potSub').textContent = bet > 0 ? `Win $${win.toFixed(2)} vs ${cfg.label}` : 'Practice — no stake';
 }
-
-function renderDifficultyGrids(){
-  if (!difficultyConfig || Object.keys(difficultyConfig).length===0) return;
-  const mk = (selected) => Object.keys(difficultyConfig).map(k=>{
-    const c=difficultyConfig[k];
-    const active = k===selected ? 'active':'';
-    return `<div class="diff-card ${active}" onclick="selectDiff('${k}')"><div class="diff-mult">${c.multiplier}x</div><div class="diff-name" style="color:${c.color}">${c.label}</div><div class="diff-elo">${c.elo} • ${c.desc}</div></div>`;
+function renderDifficultyGrids() {
+  if (!difficultyConfig || Object.keys(difficultyConfig).length === 0) return;
+  document.getElementById('difficultyGrid').innerHTML = Object.keys(difficultyConfig).map((k) => {
+    const c = difficultyConfig[k];
+    const active = k === selectedDifficulty ? 'active' : '';
+    return `<div class="diff-card ${active}" onclick="selectDiff('${k}')"><div class="diff-mult">${c.multiplier}×</div><div class="diff-name" style="color:${c.color}">${c.label}</div><div class="diff-elo">${c.elo} · ${c.desc}</div></div>`;
   }).join('');
-  document.getElementById('difficultyGrid').innerHTML = mk(selectedDifficulty);
-  // for free tab reuse same
 }
-window.selectDiff = (k)=>{
-  selectedDifficulty=k;
-  renderDifficultyGrids();
-  updateBetCalculation();
-};
-
+window.selectDiff = (k) => { selectedDifficulty = k; renderDifficultyGrids(); updateBetCalculation(); };
 document.getElementById('betAmount')?.addEventListener('input', updateBetCalculation);
 
-// ========= MATCHMAKING =========
-function findMatch(){
-  const bet = parseFloat(document.getElementById('quickBetSlider').value) || parseFloat(document.getElementById('betAmount').value) || 1;
-  if (user && user.balance < bet) { toast(`Need $${bet.toFixed(2)} - Deposit via EcoCash`, 'error'); openModal('depositModal'); return; }
-  const timeControl = document.getElementById('customTime')?.value || '10+0';
-  socket.emit('findMatch', { userId, bet, timeControl }, (res)=>{
-    if (res && res.error) toast(res.error,'error');
-  });
+function findMatch() {
+  const bet = parseFloat(document.getElementById('quickBetSlider').value) || 0;
+  if (bet > 0 && user && user.balance < bet) { toast(`You need $${bet.toFixed(2)} — deposit to play`, 'error'); openModal('depositModal'); return; }
+  const timeControl = '10+0';
+  socket.emit('findMatch', { userId, bet, timeControl }, (res) => { if (res && res.error) toast(res.error, 'error'); });
 }
-function cancelSearch(){
-  if (!currentSearchBet) return;
+function cancelSearch() {
+  if (!currentSearchBet && currentSearchBet !== 0) return;
   socket.emit('cancelMatchSearch', { userId, bet: currentSearchBet });
 }
 
-// ========= BOARD RENDERING =========
-function renderBoard(){
-  const boardEl = document.getElementById('board');
-  if (!boardEl) return;
-  boardEl.innerHTML='';
-  const ranks=['8','7','6','5','4','3','2','1'];
-  const files=['a','b','c','d','e','f','g','h'];
-  const displayRanks = boardOrientation==='white' ? ranks : [...ranks].reverse();
-  const displayFiles = boardOrientation==='white' ? files : [...files].reverse();
+async function refreshLiveStats(bet, pos) {
+  try {
+    const s = await fetch('/api/stats/live').then((r) => r.json());
+    document.getElementById('searchSub').textContent =
+      `${s.totalUsers || 0} players · ${s.waitingQueues || 0} waiting · position ${pos || 1} in $${Number(bet).toFixed(2)} queue`;
+  } catch (e) { /* offline */ }
+}
 
-  for (let r=0;r<8;r++){
-    for (let f=0;f<8;f++){
-      const rank=displayRanks[r];
-      const file=displayFiles[f];
-      const sqName=file+rank;
-      const piece=chess.get(sqName);
-      const isLight=(r+f)%2===0;
-      const isSelected=selectedSquare===sqName;
-      const isLegal=legalMoves.some(m=>m.to===sqName);
-      const isCapture=isLegal && piece;
-      const isLast=currentGame && currentGame.moves && currentGame.moves.length>0 && (currentGame.moves[currentGame.moves.length-1].from===sqName || currentGame.moves[currentGame.moves.length-1].to===sqName);
-      const isHint=hintMove && hintMove.to===sqName;
+// ============ BOARD RENDERING ============
+const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'];
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
-      const sq=document.createElement('div');
-      sq.className=`square ${isLight?'light':'dark'} ${isSelected?'selected':''} ${isLegal?'legal':''} ${isCapture?'capture':''} ${isLast?'last-move':''} ${isHint?'hint':''}`;
-      sq.dataset.square=sqName;
+function buildBoard(boardEl, c, opts = {}) {
+  boardEl.innerHTML = '';
+  const displayRanks = boardOrientation === 'white' ? RANKS : [...RANKS].reverse();
+  const displayFiles = boardOrientation === 'white' ? FILES : [...FILES].reverse();
+  const lastMove = opts.lastMove || (currentGame && currentGame.moves && currentGame.moves.length
+    ? currentGame.moves[currentGame.moves.length - 1] : null);
+  const checkSquare = opts.checkSquare || null;
+  const selSquare = opts.selected !== undefined ? opts.selected : selectedSquare;
+  const selMoves = opts.legalMoves !== undefined ? opts.legalMoves : legalMoves;
 
-      if (piece){
-        const key=piece.color+piece.type.toUpperCase();
-        const ch=pieceUnicode[key];
-        const span=document.createElement('span');
-        span.className=`piece ${piece.color==='w'?'white':'black'}`;
-        span.textContent=ch;
-        sq.appendChild(span);
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const rank = displayRanks[r];
+      const file = displayFiles[f];
+      const sqName = file + rank;
+      const piece = c.get(sqName);
+      const isLight = (r + f) % 2 === 0;
+      const isSelected = selSquare === sqName;
+      const isLegal = selMoves.some((m) => m.to === sqName);
+      const isCapture = isLegal && piece;
+      const isLast = lastMove && (lastMove.from === sqName || lastMove.to === sqName);
+      const isHint = hintMove && (hintMove.from === sqName || hintMove.to === sqName);
+      const isCheck = checkSquare === sqName;
+
+      const sq = document.createElement('div');
+      sq.className = `square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''} ${isLegal ? 'legal' : ''} ${isCapture ? 'capture' : ''} ${isLast ? 'last-move' : ''} ${isHint ? 'hint' : ''} ${isCheck ? 'check' : ''}`;
+      sq.dataset.square = sqName;
+
+      if (piece) {
+        const img = document.createElement('img');
+        img.className = 'piece-img';
+        img.src = pieceSrc(piece.color, piece.type);
+        img.alt = piece.color + piece.type;
+        img.draggable = !opts.readOnly;
+        img.addEventListener('dragstart', (e) => {
+          if (opts.onPick) opts.onPick(sqName);
+          e.dataTransfer.setData('text/plain', sqName);
+          e.dataTransfer.effectAllowed = 'move';
+        });
+        sq.appendChild(img);
       }
-      if (f===7){ const fc=document.createElement('span'); fc.className='coords file'; fc.textContent=file; sq.appendChild(fc); }
-      if (r===7){ const rc=document.createElement('span'); rc.className='coords rank'; rc.textContent=rank; sq.appendChild(rc); }
-      sq.addEventListener('click',()=> onSquareClick(sqName));
+      sq.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+      sq.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const from = e.dataTransfer.getData('text/plain');
+        if (from && opts.onDrop) opts.onDrop(from, sqName);
+      });
+      sq.addEventListener('click', () => opts.onClick && opts.onClick(sqName));
+
+      if (f === 7) { const fc = document.createElement('span'); fc.className = 'coords file'; fc.textContent = file; sq.appendChild(fc); }
+      if (r === 7) { const rc = document.createElement('span'); rc.className = 'coords rank'; rc.textContent = rank; sq.appendChild(rc); }
       boardEl.appendChild(sq);
     }
   }
-
-  if (!currentGame){
-    boardEl.innerHTML+=`<div class="game-overlay" id="boardOverlay"><div style="font-size:32px;margin-bottom:10px">♔ BetChess</div><h3 style="font-weight:800">Find Match with Bet</h3><p style="color:var(--muted);font-size:12px;max-width:320px;margin-top:8px">Like chess.com but with added option for putting your bet and system searches others with same bet and pairs them. Deposit via EcoCash to start.</p><button class="btn btn-green" style="margin-top:12px" onclick="findMatch()">⚡ Find $${(parseFloat(document.getElementById('quickBetSlider')?.value||1)).toFixed(2)} Match</button><div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center"><span class="chip">💵 $0.50 min</span><span class="chip">♞ Stockfish</span><span class="chip">🤖 LLM Agents</span></div></div>`;
-  }
 }
 
-function onSquareClick(square){
-  if (!currentGame || currentGame.status!=='playing') return;
-  const piece=chess.get(square);
-  const myColor=currentGame.playerColor || (currentGame.white.id===userId ? 'w' : 'b');
-  // For pvp
-  if (currentGame.type==='pvp_bet'){
-    const playerColor = currentGame.white.id===userId ? 'w' : 'b';
-    const isMyTurn = chess.turn()===playerColor;
-    if (!isMyTurn) return toast("Not your turn", 'info');
-    const isMyPiece = piece && piece.color===playerColor;
-    if (selectedSquare){
-      const mv = legalMoves.find(m=>m.to===square);
-      if (mv){ makePvpMove(selectedSquare, square, mv.promotion); selectedSquare=null; legalMoves=[]; renderBoard(); return; }
+function renderBoard() {
+  const boardEl = document.getElementById('board');
+  if (!boardEl) return;
+  const inCheck = chess.inCheck();
+  const turn = chess.turn();
+  let kingSq = null;
+  if (inCheck) {
+    const board = chess.board();
+    outer: for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+      const p = board[r][f];
+      if (p && p.type === 'k' && p.color === turn) {
+        kingSq = FILES[f] + RANKS[r];
+        break outer;
+      }
     }
-    if (isMyPiece){ selectedSquare=square; legalMoves=chess.moves({ square, verbose:true }); renderBoard(); }
-    else { selectedSquare=null; legalMoves=[]; renderBoard(); }
-    return;
   }
-
-  // Engine / LLM
-  const isMyTurn = chess.turn()===myColor;
-  if (!isMyTurn) return toast("Not your turn - opponent thinking", 'info');
-  const isMyPiece = piece && piece.color===myColor;
-
-  if (selectedSquare){
-    const mv=legalMoves.find(m=>m.to===square);
-    if (mv){ makePlayerMove(selectedSquare, square, mv.promotion); selectedSquare=null; legalMoves=[]; renderBoard(); return; }
-  }
-  if (isMyPiece){ selectedSquare=square; legalMoves=chess.moves({ square, verbose:true }); renderBoard(); }
-  else { selectedSquare=null; legalMoves=[]; renderBoard(); }
-}
-
-function makePvpMove(from,to,prom){
-  socket.emit('makeMovePvp', { userId, gameId: currentGame.id, from, to, promotion: prom }, (res)=>{
-    if (res && res.error) toast(res.error,'error');
+  buildBoard(boardEl, chess, {
+    readOnly: isSpectator || !currentGame || currentGame.status !== 'playing',
+    checkSquare: kingSq,
+    onClick: (sq) => onSquareClick(sq),
+    onPick: (sq) => onSquareClick(sq),
+    onDrop: (from, to) => attemptMove(from, to),
   });
+
+  if (!currentGame) {
+    const overlay = document.createElement('div');
+    overlay.className = 'game-overlay';
+    overlay.id = 'boardOverlay';
+    overlay.innerHTML = `
+      <div style="font-size:40px;margin-bottom:8px">♞</div>
+      <h3 style="font-weight:800;font-size:18px;letter-spacing:-.3px">Your move</h3>
+      <p style="color:var(--muted);font-size:12.5px;max-width:330px;margin-top:8px;line-height:1.6">
+        Take on the rated Stockfish ladder, send a friend an invite link, or jump into a staked quick match.
+      </p>
+      <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+        <button class="btn btn-cyan" onclick="coachAction('engine')">⚔️ Play engine</button>
+        <button class="btn btn-outline" onclick="coachAction('friend')">🔗 Invite friend</button>
+      </div>`;
+    boardEl.appendChild(overlay);
+  }
 }
 
-function makePlayerMove(from,to,prom){
-  if (!currentGame) return;
-  const tmp=new Chess(currentGame.fen);
-  const test=tmp.move({ from,to, promotion: prom||'q' });
-  if (!test) return toast('Invalid','error');
-  chess.load(currentGame.fen);
-  chess.move({ from,to, promotion: prom||'q' });
-  renderBoard(); renderMovesLocal();
-  if (currentGame.type==='engine'){
-    socket.emit('engineMove', { userId, gameId: currentGame.id, from, to, promotion: prom }, (res)=>{
-      if (res && res.error){ toast(res.error,'error'); chess.load(currentGame.fen); renderBoard(); }
-      else { if (currentGame) { currentGame.fen=res.fen; currentGame.moves.push(res.move); renderGameInfo(); } }
+function onSquareClick(square) {
+  if (isSpectator) return;
+  if (!currentGame || currentGame.status !== 'playing') return;
+  const piece = chess.get(square);
+  const myColor = myColorIn(currentGame);
+  if (!myColor) return;
+  const isMyTurn = chess.turn() === myColor;
+  if (selectedSquare) {
+    const mv = legalMoves.find((m) => m.to === square);
+    if (mv) { attemptMove(selectedSquare, square, mv.promotion); selectedSquare = null; legalMoves = []; renderBoard(); return; }
+  }
+  if (piece && piece.color === myColor && isMyTurn) {
+    selectedSquare = square;
+    legalMoves = chess.moves({ square, verbose: true });
+  } else {
+    selectedSquare = null;
+    legalMoves = [];
+    if (!isMyTurn) toast('Opponent to move', 'info');
+  }
+  renderBoard();
+}
+
+function attemptMove(from, to, prom) {
+  if (isSpectator || !currentGame || currentGame.status !== 'playing') return;
+  const myColor = myColorIn(currentGame);
+  if (!myColor || chess.turn() !== myColor) return;
+  const verbose = chess.moves({ verbose: true }).find((m) => m.from === from && m.to === to);
+  if (!verbose) { toast('Illegal move', 'error'); return; }
+  const promotion = prom || verbose.promotion || 'q';
+  if (currentGame.type === 'pvp_bet' || currentGame.type === 'pvp_friend') {
+    socket.emit('makeMovePvp', { userId, gameId: currentGame.id, from, to, promotion }, (res) => {
+      if (res && res.error) toast(res.error, 'error');
     });
-  } else if (currentGame.type==='llm'){
-    socket.emit('llmHumanMove', { userId, gameId: currentGame.id, from,to, promotion: prom }, (res)=>{
-      if (res && res.error) toast(res.error,'error');
-      else { if (res) currentGame.fen=chess.fen(); }
+  } else if (currentGame.type === 'engine') {
+    // optimistic local render; server is authoritative and echoes the move
+    const test = new Chess(currentGame.fen);
+    if (!test.move({ from, to, promotion })) return toast('Invalid move', 'error');
+    chess.move({ from, to, promotion });
+    renderBoard(); renderMovesLocal();
+    selectedSquare = null; legalMoves = [];
+    socket.emit('engineMove', { userId, gameId: currentGame.id, from, to, promotion }, (res) => {
+      if (res && res.error) { toast(res.error, 'error'); chess.load(currentGame.fen); renderBoard(); }
     });
   }
 }
 
-function renderGameInfo(){
-  if (!currentGame){
-    document.getElementById('gameInfo').innerHTML=`<div class="empty-state"><div class="empty-icon">♟️</div><b>Welcome!</b><br>Deposit, set bet, click Find Match — system pairs you with same bet like chess.com random + bet filter.<br><br>Or play vs Stockfish/LLM instantly.</div>`;
-    document.getElementById('gameStatusBadge').textContent='No Game';
-    document.getElementById('blackName').textContent='Choose mode to start';
+function renderGameInfo() {
+  const info = document.getElementById('gameInfo');
+  if (!currentGame) {
+    info.innerHTML = `<div class="empty-state"><div class="empty-icon">♟️</div><b style="color:var(--text)">Ready when you are.</b><br>Play the rated engine ladder, invite a friend, or quick-match.</div>`;
+    document.getElementById('blackName').firstChild.textContent = 'Opponent ';
+    document.getElementById('blackStatus').textContent = 'Pick a mode to start';
+    document.getElementById('potDisplay').textContent = '$0.00';
+    document.getElementById('potSub').textContent = 'No active game';
+    document.getElementById('liveWin').textContent = '$0.00';
+    document.getElementById('liveMult').textContent = '—';
     return;
   }
-  const isMyTurn = currentGame.type==='pvp_bet' ? (chess.turn()===(currentGame.white.id===userId?'w':'b')) : chess.turn()===currentGame.playerColor;
-  const opponent = currentGame.white.id===userId ? currentGame.black : currentGame.white;
-  document.getElementById('blackName').textContent = opponent?.username || `Stockfish ${currentGame.difficultyConfig?.label||''}`;
-  document.getElementById('blackStatus').textContent = `${isMyTurn?'Waiting':'Thinking...'} • ${currentGame.type==='pvp_bet' ? `Bet $${currentGame.bet}` : currentGame.difficultyConfig ? `${currentGame.difficultyConfig.label} ${currentGame.difficultyConfig.multiplier}x` : 'AI Agent'}`;
-  document.getElementById('whiteName').textContent = user ? user.username+' (You)' : 'You';
-  document.getElementById('whiteStatus').textContent = `${isMyTurn?'Your turn':'Opponent turn'} • ${currentGame.type==='pvp_bet'?'PvP Bet':currentGame.isFree?'Free':'Bet Game'}`;
+  const myColor = myColorIn(currentGame);
+  const isMyTurn = myColor ? chess.turn() === myColor : false;
+  const opp = currentGame.white?.id === userId ? currentGame.black : currentGame.white;
+  const blackNameEl = document.getElementById('blackName');
+  if (opp) blackNameEl.firstChild.textContent = `${opp.username} `;
+  const cfg = currentGame.difficultyConfig;
+  document.getElementById('blackStatus').textContent =
+    `${isMyTurn ? 'Waiting for you' : 'Thinking…'} · ${currentGame.type === 'pvp_bet' || currentGame.type === 'pvp_friend' ? (currentGame.bet ? `Stake $${currentGame.bet}` : 'Casual') : cfg ? `${cfg.label} · ${cfg.multiplier}×` : 'Engine'}`;
+  document.getElementById('whiteName').firstChild.textContent = `${user ? user.username : 'You'} `;
+  document.getElementById('whiteStatus').textContent =
+    `${isSpectator ? 'Spectating' : isMyTurn ? 'Your move' : 'Opponent move'} · ${currentGame.type === 'engine' ? (currentGame.isFree ? 'Practice' : 'Rated stake') : 'Rated game'}`;
 
-  const cfg=currentGame.difficultyConfig;
-  const potText = currentGame.type==='pvp_bet' ? `Pot $${(currentGame.bet*2).toFixed(2)}` : currentGame.isFree ? 'FREE' : `$${currentGame.bet} bet • Win $${(currentGame.bet*(cfg?.multiplier||2.5)*0.9).toFixed(2)}`;
-  document.getElementById('gameInfo').innerHTML=`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>${currentGame.id}</b><span class="chip" style="color:${cfg?.color||'var(--green)'}">${currentGame.type==='pvp_bet' ? `PvP $${currentGame.bet}` : cfg ? `${cfg.label} ${cfg.multiplier}x` : currentGame.llmConfig?.model||'LLM'}</span></div>
-    <div style="background:var(--bg3);border-radius:10px;padding:10px;font-size:12px"><div style="display:flex;justify-content:space-between"><span>Pot</span><b style="color:var(--green)">${potText}</b></div><div style="display:flex;justify-content:space-between"><span>Turn</span><b>${chess.turn()==='w'?'White':'Black'} ${isMyTurn?'(YOU)':''}</b></div>${currentGame.result?`<div style="margin-top:6px;color:var(--yellow);font-weight:700">${currentGame.result}</div>`:''}</div>
-  `;
-  document.getElementById('potDisplay').textContent = currentGame.type==='pvp_bet' ? `$${(currentGame.bet*2).toFixed(2)}` : currentGame.isFree ? 'FREE' : `$${currentGame.bet.toFixed(2)}`;
-  document.getElementById('potSub').textContent = currentGame.type==='pvp_bet' ? `Winner $${(currentGame.bet*2*0.9).toFixed(2)}` : currentGame.isFree ? 'Practice' : `To win $${(currentGame.bet*(cfg?.multiplier||2.5)*0.9).toFixed(2)}`;
-  document.getElementById('liveMult').textContent = cfg ? cfg.multiplier+'x' : currentGame.type==='pvp_bet' ? '1.8x' : '-';
-  document.getElementById('liveWin').textContent = currentGame.isFree ? '$0' : currentGame.type==='pvp_bet' ? `$${(currentGame.bet*2*0.9).toFixed(2)}` : `$${(currentGame.bet*(cfg?.multiplier||2.5)*0.9).toFixed(2)}`;
+  const potText = (currentGame.type === 'pvp_bet' || currentGame.type === 'pvp_friend')
+    ? `Pot $${((currentGame.bet || 0) * 2).toFixed(2)}`
+    : currentGame.isFree ? 'FREE' : `$${currentGame.bet} stake · win $${(currentGame.bet * (cfg?.multiplier || 2.5) * 0.9).toFixed(2)}`;
+  info.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <b style="font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--muted)">${currentGame.id}</b>
+      <span class="chip" style="color:${cfg?.color || 'var(--cyan)'}">${currentGame.type === 'engine' ? `${cfg?.label || 'Engine'} ${cfg?.multiplier || ''}×` : currentGame.bet ? `Stake $${currentGame.bet}` : 'Casual'}</span>
+    </div>
+    <div style="background:rgba(2,6,23,0.45);border:1px solid var(--hairline);border-radius:12px;padding:12px;font-size:12px">
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Pot</span><b style="color:var(--green)">${potText}</b></div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:var(--muted)">Turn</span><b>${chess.turn() === 'w' ? 'White' : 'Black'}${isMyTurn ? ' (you)' : ''}</b></div>
+      ${currentGame.result ? `<div style="margin-top:8px;color:var(--amber);font-weight:700">${currentGame.result}</div>` : ''}
+    </div>
+    ${currentGame.status === 'playing' && !isSpectator ? `<button class="btn btn-small btn-outline" style="width:100%;margin-top:10px" onclick="shareCurrentGame()">🔗 Share / invite spectators</button>` : ''}`;
+
+  const isPvp = currentGame.type === 'pvp_bet' || currentGame.type === 'pvp_friend';
+  document.getElementById('potDisplay').textContent = isPvp ? `$${((currentGame.bet || 0) * 2).toFixed(2)}` : currentGame.isFree ? 'FREE' : `$${Number(currentGame.bet || 0).toFixed(2)}`;
+  document.getElementById('potSub').textContent = isPvp ? `Winner takes $${((currentGame.bet || 0) * 2 * 0.9).toFixed(2)}` : currentGame.isFree ? 'Practice' : `To win $${(currentGame.bet * (cfg?.multiplier || 2.5) * 0.9).toFixed(2)}`;
+  document.getElementById('liveMult').textContent = isPvp ? '90% pot' : cfg ? `${cfg.multiplier}×` : '—';
+  document.getElementById('liveWin').textContent = currentGame.isFree ? '$0.00' : isPvp ? `$${((currentGame.bet || 0) * 2 * 0.9).toFixed(2)}` : `$${(currentGame.bet * (cfg?.multiplier || 2.5) * 0.9).toFixed(2)}`;
 }
 
-function renderMoves(){
-  renderMovesLocal();
-}
-function renderMovesLocal(){
-  const moves=chess.history({ verbose:true });
-  let html='';
-  for (let i=0;i<moves.length;i+=2){
-    const w=moves[i];
-    const b=moves[i+1];
-    html+=`<div class="move-row"><span class="move-num">${Math.floor(i/2)+1}</span><span class="move">${w.san}</span><span class="move">${b?b.san:''}</span></div>`;
+function renderMoves() { renderMovesLocal(); }
+function renderMovesLocal() {
+  const moves = chess.history({ verbose: true });
+  let html = '';
+  for (let i = 0; i < moves.length; i += 2) {
+    html += `<div class="move-row"><span class="move-num">${Math.floor(i / 2) + 1}</span><span class="move">${moves[i].san}</span><span class="move">${moves[i + 1] ? moves[i + 1].san : ''}</span></div>`;
   }
-  const panel=document.getElementById('movesPanel');
-  if (panel) { panel.innerHTML=html; panel.scrollTop=panel.scrollHeight; }
+  const panel = document.getElementById('movesPanel');
+  if (panel) { panel.innerHTML = html; panel.scrollTop = panel.scrollHeight; }
 }
 
-// ========= ANALYSIS ENGINE (Lichess Stockfish 18) =========
-// The engine that plays games lives on the server (clients cannot be trusted
-// with real money). In the browser we run the same Lichess wasm build in a
-// worker for the eval bar, hints and analysis, with the server as fallback.
-let engineClient = null;
-let evalThrottleTimer = null;
-let lastEvalFen = null;
-
-function initEngineClient(){
-  if (typeof EngineClient === 'undefined'){ setEngineStatus('No engine', ''); return; }
+// ============ ANALYSIS ENGINE ============
+function initEngineClient() {
+  if (typeof EngineClient === 'undefined') { setEngineStatus('No engine', ''); return; }
   engineClient = new EngineClient({ socket });
-  engineClient.onStatus((status, name)=>{
+  engineClient.onStatus((status) => {
     const labels = {
       idle: 'Engine idle',
       loading: 'Engine starting…',
@@ -497,743 +655,608 @@ function initEngineClient(){
       server: 'Server engine ✓',
       unavailable: 'No engine',
     };
-    setEngineStatus(labels[status] || name || 'Engine', name || '', status);
+    setEngineStatus(labels[status] || 'Engine', '', status);
   });
   engineClient.init();
   loadPaymentProviders();
 }
-
-function setEngineStatus(text, title, status){
+function setEngineStatus(text, title, status) {
   if (status) document.body.dataset.engineStatus = status;
   const el = document.getElementById('engineStatus');
   if (!el) return;
   el.textContent = text;
-  el.title = title || '';
   el.className = 'status-badge ' + (/✓/.test(text) ? 'status-playing' : '');
 }
-
-/** Legacy hook - kept so older markup calling it does not break. */
-function handleEngineMessage(line){ /* handled inside EngineClient */ }
-
-function updateEvalUI(){
-  const s=currentEval.score;
-  let pct=50 + s*8; pct=Math.max(5,Math.min(95,pct));
-  const vf=document.getElementById('verticalFill'); if (vf) vf.style.height=(100-pct)+'%';
-  const ef=document.getElementById('evalFill'); if (ef) ef.style.width=pct+'%';
-  const ed=document.getElementById('evalDisplay'); if (ed) ed.textContent=currentEval.text;
-  const en=document.getElementById('evalNumber'); if (en) en.textContent=currentEval.score>0?`+${currentEval.score.toFixed(1)}`:currentEval.score.toFixed(1);
+function updateEvalUI() {
+  const s = currentEval.score;
+  let pct = 50 + s * 8; pct = Math.max(5, Math.min(95, pct));
+  const vf = document.getElementById('verticalFill'); if (vf) vf.style.height = (100 - pct) + '%';
+  const ef = document.getElementById('evalFill'); if (ef) ef.style.width = pct + '%';
+  const ed = document.getElementById('evalDisplay'); if (ed) ed.textContent = currentEval.text;
+  const en = document.getElementById('evalNumber'); if (en) en.textContent = s > 0 ? `+${s.toFixed(1)}` : s.toFixed(1);
 }
-
-/** Ask the engine for an evaluation (debounced so dragging moves is smooth). */
-function requestEvaluation(fen){
+function requestEvaluation(fen) {
   if (!analysisEnabled || !engineClient || !fen) return;
   clearTimeout(evalThrottleTimer);
-  evalThrottleTimer = setTimeout(async ()=>{
-    lastEvalFen = fen;
+  evalThrottleTimer = setTimeout(async () => {
     const res = await engineClient.analyse({ fen, movetimeMs: 350, multiPv: 1 });
-    if (!res || fen !== (currentGame ? currentGame.fen : lastEvalFen)) return;
-    const pov = (fen.split(' ')[1] === 'b') ? -1 : 1; // UCI scores are side-to-move relative
-    if (res.mate != null){
-      currentEval = { score: res.mate > 0 ? 10 : -10, text: `Mate in ${Math.abs(res.mate)}`, depth: res.depth, pv: (res.pv||[]).join(' ') };
-    } else if (res.cp != null){
+    if (!res) return;
+    const pov = fen.split(' ')[1] === 'b' ? -1 : 1;
+    if (res.mate != null) {
+      currentEval = { score: res.mate > 0 ? 10 : -10, text: `Mate in ${Math.abs(res.mate)}`, depth: res.depth, pv: (res.pv || []).join(' ') };
+    } else if (res.cp != null) {
       const whitePov = (res.cp / 100) * pov;
       currentEval = {
         score: whitePov,
-        text: `${whitePov > 0 ? '+' : ''}${whitePov.toFixed(1)} ${Math.abs(whitePov) < 0.05 ? 'Equal' : whitePov > 0 ? 'White better' : 'Black better'}`,
+        text: `${whitePov > 0 ? '+' : ''}${whitePov.toFixed(1)} · ${Math.abs(whitePov) < 0.3 ? 'equal position' : whitePov > 0 ? 'White better' : 'Black better'}`,
         depth: res.depth,
-        pv: (res.pv||[]).join(' '),
+        pv: (res.pv || []).join(' '),
       };
     }
     updateEvalUI();
-    const al=document.getElementById('analysisLines');
-    if (al) al.innerHTML=`<div><b>Depth ${currentEval.depth}</b> • ${currentEval.text} <span style="color:var(--muted)">(${res.source})</span></div><div style="margin-top:6px;color:var(--text)">Best: ${(res.pv||[]).slice(0,8).join(' ') || res.bestMove || '…'}</div>`;
+    const al = document.getElementById('analysisLines');
+    if (al) al.innerHTML = `<div><b>Depth ${currentEval.depth}</b> · ${currentEval.text} <span style="color:var(--faint)">(${res.source})</span></div><div style="margin-top:6px;color:var(--text-2)">${(res.pv || []).slice(0, 10).join(' ') || res.bestMove || '…'}</div>`;
   }, 250);
 }
 
-// ========= ENGINE GAME START =========
-function startEngineGame(isFree){
-  const bet=parseFloat(document.getElementById('betAmount').value)||0.5;
-  const difficulty=isFree ? selectedFreeDifficulty : selectedDifficulty;
-  let colorSel=document.getElementById('playerColor').value;
-  if (isFree) colorSel=document.getElementById('freePlayerColor')?.value || colorSel;
-  // free panel doesn't exist now, use same
-  const color=colorSel==='random' ? (Math.random()>0.5?'w':'b') : colorSel;
-  if (!isFree && user && user.balance < bet){ toast(`Need $${bet.toFixed(2)} - Deposit`, 'error'); openModal('depositModal'); return; }
-  socket.emit('createEngineGame', { userId, bet, difficulty, isFree, color }, (res)=>{ if (res && res.error) toast(res.error,'error'); });
-}
-
-// ========= LLM ARENA =========
-function startLLMGame(isFree){
-  const bet=parseFloat(document.getElementById('betAmount').value)||1;
-  const provider=document.getElementById('llmProvider').value;
-  const model=document.getElementById('llmModel').value;
-  const apiKey=document.getElementById('llmApiKey').value.trim();
-  const color=document.getElementById('llmColor').value==='w'?'w':'b';
-  if (!isFree && provider!=='fallback' && !apiKey){ toast('Enter API key or use Demo mode', 'error'); return; }
-  if (!isFree && user.balance < bet){ toast(`Need $${bet}`, 'error'); openModal('depositModal'); return; }
-  const llmConfig={ provider, model, apiKey: apiKey||null, customUrl: null };
-  if (provider==='fallback') llmConfig.apiKey=null;
-  socket.emit('createLLMGame', { userId, bet, llmConfig, color, isFree }, (res)=>{ if (res&&res.error) toast(res.error,'error'); });
-}
-
-/**
- * Last-resort move when the LLM agent fails or returns something illegal:
- * ask the server engine (Lichess Stockfish) and play that instead.
- */
-async function fallbackEngineMove(fen, game){
-  const g = game || currentGame;
-  if (!g) return;
-  socket.emit('requestEngineMove', { gameId: g.id, fen, difficulty: 'hard' }, (res)=>{
-    if (!res || res.error || !res.move) return hideEngineThinking();
-    const { from, to, promotion } = res.move;
-    try { chess.move({ from, to, promotion: promotion || 'q' }); } catch(e){ return hideEngineThinking(); }
-    socket.emit('llmEngineMove', { userId, gameId: g.id, from, to, promotion: promotion || 'q' });
-    renderBoard(); renderMovesLocal();
-    addCommentary(`♞ Stockfish covers for the LLM: ${from}${to}`, 'llm');
-    hideEngineThinking();
+// ============ GAME ACTIONS ============
+function startEngineGame(isFree) {
+  const bet = parseFloat(document.getElementById('betAmount').value) || 0;
+  const difficulty = selectedDifficulty;
+  const colorSel = document.getElementById('playerColor').value;
+  const color = colorSel === 'random' ? (Math.random() > 0.5 ? 'w' : 'b') : colorSel;
+  if (!isFree && bet > 0 && user && user.balance < bet) { toast(`You need $${bet.toFixed(2)} — deposit to play`, 'error'); openModal('depositModal'); return; }
+  socket.emit('createEngineGame', { userId, bet: isFree ? 0 : bet, difficulty, isFree: !!isFree, color }, (res) => {
+    if (res && res.error) toast(res.error, 'error');
   });
+  coachSay(isFree ? 'Free practice started — no stake, no pressure. Your rating still moves.' : `Staked game vs ${difficultyConfig[difficulty]?.label || 'engine'} — good luck!`);
 }
 
-async function requestLLMMove(fen, game){
-  const provider=game.llmConfig?.provider || 'fallback';
-  const model=game.llmConfig?.model || 'gpt-4o-mini';
-  const apiKey=game.llmConfig?.apiKey || null;
-  const legalMoves=chess.moves({ verbose:true }).map(m=> m.from+m.to+(m.promotion||''));
-  const history=game.moves?.map(m=>m.san||'').join(' ') || '';
-  addCommentary(`🤔 ${model} thinking... FEN: ${fen.split(' ')[0]}...`, 'thinking');
-  document.getElementById('engineThinking').style.display='flex';
-  document.getElementById('thinkingText').textContent=`🤖 ${model} thinking...`;
-
-  try {
-    let moveUci=null, commentary='';
-
-    if (provider==='fallback' || !apiKey){
-      // Call our fallback API (server simulates LLM)
-      const resp=await fetch('/api/llm/move', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fen, legalMoves, provider:'fallback', playerColor: game.playerColor==='w'?'b':'w', history }) });
-      const data=await resp.json();
-      moveUci=data.move;
-      commentary=data.commentary;
-    } else {
-      // Direct client call to /api/llm/move which proxies with real key
-      const resp=await fetch('/api/llm/move', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ fen, legalMoves, provider, model, apiKey, playerColor: game.playerColor==='w'?'b':'w', history }) });
-      const data=await resp.json();
-      moveUci=data.move;
-      commentary=data.commentary;
-    }
-
-    if (!moveUci) throw new Error('No move returned');
-    // Validate move is legal - convert UCI to from/to
-    const from=moveUci.substring(0,2); const to=moveUci.substring(2,4); const promo=moveUci.length>4?moveUci[4]:undefined;
-    // Check if legal
-    const temp=new Chess(fen);
-    const legalCheck=temp.moves({ verbose:true }).some(m=> m.from===from && m.to===to);
-    if (!legalCheck){
-      addCommentary(`⚠️ LLM returned illegal ${moveUci}, using fallback Stockfish move`, 'error');
-      fallbackEngineMove(fen);
-      document.getElementById('engineThinking').style.display='none';
-      return;
-    }
-
-    addCommentary(`🤖 ${model}: "${commentary}" → Plays ${moveUci.toUpperCase()}`, 'llm');
-
-    // Send move to server as engineReply? For LLM, we need llm move handling
-    // For now, make move locally and send via engineReply if game type engine? But LLM game uses different flow
-    // We'll use same as engine but via llm endpoint: make move via Chess and then emit llmHumanMove? Actually we need reverse: LLM move should be applied as opponent move
-    // Simulate opponent move: apply to chess and emit as if its engine move
-    // Use socket emit for LLM: we will reuse engineReply for simplicity but with llm type, server will handle via llmHumanMove? Let's just apply locally and inform server via engineReply for llm type? Better create llmMove event
-    // Quick hack: make move on client chess and send to server as llm move
-    chess.move({ from, to, promotion: promo||'q' });
-    renderBoard(); renderMovesLocal();
-
-    // Inform server
-    socket.emit('engineReply', { userId, gameId: game.id, from, to, promotion: promo }, ()=>{});
-    // But for LLM game server expects engineReply? We created llm game but using same handler - it will work because game.chessInstance move
-    // Actually we already created llm game with different handler, we need to call llm endpoint for human moves only. So we need to sync server: we moved client side, now tell server to update
-    // We'll call a custom event llmEngineMove
-    // For simplicity, just emit engineReply and also llmHumanMove equivalent
-    // Let's emit llmHumanMove with opposite? no
-    // Workaround: we emit a generic "engineReply" for llm game too - server has engineReply handler that checks game type engine only. So need new handler
-    // Let's emit "llmEngineMove"
-    socket.emit('llmEngineMove', { userId, gameId: game.id, from, to, promotion: promo }); // will be ignored but we already updated client
-
-    // For now, trust client and continue
-    if (chess.isGameOver()){
-      // handle game over
-      setTimeout(()=> showEngineOver('Game Over by LLM', chess.isCheckmate() ? 'loss' : 'draw', 0, 2, currentGame), 500);
-    }
-
-  } catch(e){
-    console.error(e);
-    addCommentary(`❌ LLM error: ${e.message}. Fallback to Stockfish`, 'error');
-    fallbackEngineMove(fen);
-  } finally {
-    document.getElementById('engineThinking').style.display='none';
+function resignGame() {
+  if (!currentGame || currentGame.status !== 'playing' || isSpectator) return toast('No active game', 'error');
+  if (!window.confirm('Resign this game?')) return;
+  const type = currentGame.type;
+  if (type === 'pvp_bet' || type === 'pvp_friend') {
+    socket.emit('resignPvp', { userId, gameId: currentGame.id }, (res) => { if (res && res.error) toast(res.error, 'error'); });
+  } else {
+    socket.emit('engineGameOver', { userId, gameId: currentGame.id, result: 'resign' }, (res) => { if (res && res.error) toast(res.error, 'error'); });
   }
 }
-
-// Need to add missing socket handler for llmEngineMove on server? We'll just reuse engineReply on server by making it accept llm type as well
-// For now client side already handles.
-
-function addCommentary(text, type='info'){
-  const box=document.getElementById('commentaryBox');
-  const pageBox=document.getElementById('llmPageCommentary');
-  const div=document.createElement('div');
-  div.style.marginBottom='8px'; div.style.padding='6px 8px'; div.style.borderRadius='8px';
-  if (type==='llm'){ div.style.background='rgba(129,182,76,.1)'; div.style.border='1px solid rgba(129,182,76,.2)'; }
-  else if (type==='thinking'){ div.style.background='var(--bg3)'; div.style.fontStyle='italic'; }
-  else if (type==='error'){ div.style.background='rgba(224,90,71,.1)'; div.style.color='var(--red)'; }
-  div.textContent=text;
-  if (box) { box.appendChild(div); box.scrollTop=box.scrollHeight; }
-  if (pageBox) { pageBox.appendChild(div); pageBox.scrollTop=pageBox.scrollHeight; }
-  llmCommentaryHistory.push(text);
-}
-
-function startLLMvsLLM(){
-  toast('LLM vs LLM demo - Watch two AIs battle!', 'info');
-  // Start a game where both sides are LLM
-  const provider=document.getElementById('llmProvider').value;
-  const model=document.getElementById('llmModel').value;
-  const apiKey=document.getElementById('llmApiKey').value.trim();
-  const llmConfig={ provider, model, apiKey: apiKey||null };
-  socket.emit('createLLMGame', { userId, bet:0, llmConfig, color:'w', isFree:true }, (res)=>{
-    if (res) {
-      // Auto play both sides with LLM calls every move
-      currentGame.llmAutoPlay=true;
-      addCommentary('🎬 LLM vs LLM Battle started! Both sides are AI agents.', 'llm');
-      // Loop
-      let autoLoop = setInterval(async ()=>{
-        if (!currentGame || currentGame.status!=='playing' || !currentGame.llmAutoPlay) { clearInterval(autoLoop); return; }
-        await requestLLMMove(chess.fen(), currentGame);
-      }, 4000);
-    }
+function offerDraw() {
+  if (!currentGame || currentGame.status !== 'playing' || isSpectator) return toast('No active game', 'error');
+  if (currentGame.type === 'engine') return toast('The engine never accepts draws — checkmate is the only way', 'info');
+  socket.emit('offerDraw', { userId, gameId: currentGame.id }, (res) => {
+    if (res && res.error) return toast(res.error, 'error');
+    toast('Draw offer sent to your opponent', 'success');
   });
 }
-function startLLMvsStockfish(){
-  toast('LLM vs Stockfish - Ultimate test!', 'info');
-  // Create free engine game but then have Stockfish vs LLM alternating: we can just start engine game and have LLM play as human? For demo start LLM game vs Stockfish engine logic
-  const provider=document.getElementById('llmProvider').value;
-  const model=document.getElementById('llmModel').value;
-  const apiKey=document.getElementById('llmApiKey').value.trim();
-  const llmConfig={ provider, model, apiKey: apiKey||null };
-  socket.emit('createEngineGame', { userId, bet:0, difficulty:'hard', isFree:true, color:'w' }, (res)=>{
-    if (res){
-      currentGame.llmConfig=llmConfig;
-      currentGame.llmVsStockfish=true;
-      addCommentary('🤖 LLM vs ♞ Stockfish Hard: LLM is White, Stockfish is Black. Let battle commence!', 'llm');
-    }
+function flipBoard() { boardOrientation = boardOrientation === 'white' ? 'black' : 'white'; renderBoard(); if (currentPuzzle) renderPuzzleBoard(); }
+
+async function getHint() {
+  if (!currentGame || currentGame.status !== 'playing') return toast('Start a game first', 'error');
+  if (!engineClient) return toast('Engine is starting…', 'info');
+  const uci = await engineClient.bestMove(chess.fen(), { movetimeMs: 700 });
+  if (!uci) return toast('Engine unavailable — try again', 'error');
+  hintMove = { from: uci.substring(0, 2), to: uci.substring(2, 4) };
+  renderBoard();
+  const probe = new Chess(chess.fen());
+  const mv = probe.move({ from: hintMove.from, to: hintMove.to, promotion: uci.length > 4 ? uci[4] : 'q' });
+  toast(`Hint: ${mv ? mv.san : uci}`, 'success');
+}
+async function showSolution() {
+  if (!engineClient) return toast('Engine starting…', 'info');
+  const best = await engineClient.bestMove(chess.fen(), { movetimeMs: 700 });
+  toast(best ? `Best move: ${best.toUpperCase()}` : `Best line: ${currentEval.pv || 'calculating…'}`, 'info');
+}
+function toggleEngine() {
+  analysisEnabled = !analysisEnabled;
+  toast(analysisEnabled ? 'Analysis engine on' : 'Analysis engine off', 'info');
+  if (analysisEnabled && currentGame) requestEvaluation(currentGame.fen);
+}
+function openAnalysis() { switchRightTab('analysis'); }
+function resetBoard() { chess.reset(); currentGame = null; hintMove = null; selectedSquare = null; legalMoves = []; isSpectator = false; renderBoard(); renderGameInfo(); document.getElementById('movesPanel').innerHTML = ''; }
+
+// ============ FRIEND INVITES ============
+function createFriendInvite() {
+  const bet = parseFloat(document.getElementById('customBet').value) || 0;
+  const timeControl = document.getElementById('customTime').value;
+  const color = document.getElementById('friendColor').value;
+  if (bet > 0 && user && user.balance < bet) { toast(`You need $${bet.toFixed(2)} for this stake`, 'error'); openModal('depositModal'); return; }
+  socket.emit('createFriendInvite', { userId, bet, timeControl, color }, (res) => {
+    if (res && res.error) return toast(res.error, 'error');
+    const url = `${window.location.origin}${window.location.pathname}?invite=${res.gameId}`;
+    document.getElementById('shareLink').value = url;
+    document.getElementById('shareModalSub').textContent = bet > 0 ? `Staked game · $${bet.toFixed(2)} per player · ${timeControl}` : `Casual game · ${timeControl}`;
+    document.getElementById('shareHint').textContent = 'Your friend opens the link, signs in, and joins as your opponent. Stakes are held in escrow when they join; the winner takes 90% of the pot.';
+    openModal('shareModal');
+    navigator.clipboard?.writeText(url).catch(() => {});
+    toast('Invite created — link copied to clipboard', 'success');
+    coachSay('Invite link ready. Send it to your friend — they will drop straight into the game when they open it.');
   });
 }
 
-// ========= PUZZLES =========
-function nextPuzzle(){
-  socket.emit('getPuzzle', (p)=>{
-    if (!p) return;
-    currentPuzzle=p;
-    puzzleChess.load(p.fen);
-    // Render puzzle board (reuse main board for now, but also puzzleBoard)
-    chess.load(p.fen);
-    currentGame=null;
-    renderBoard();
-    document.getElementById('puzzleTheme').textContent=`Theme: ${p.theme}`;
-    document.getElementById('puzzleRating').textContent=p.rating;
-    document.getElementById('puzzleDesc').textContent=p.desc;
-    // Render puzzleBoard if exists
-    const pb=document.getElementById('puzzleBoard');
-    if (pb){
-      pb.innerHTML='';
-      // quick render same as board but with puzzleChess
-      const ranks=['8','7','6','5','4','3','2','1']; const files=['a','b','c','d','e','f','g','h'];
-      for (let r=0;r<8;r++){ for (let f=0;f<8;f++){ const sq=files[f]+ranks[r]; const piece=puzzleChess.get(sq); const isLight=(r+f)%2===0; const sqEl=document.createElement('div'); sqEl.className=`square ${isLight?'light':'dark'}`; if (piece){ const key=piece.color+piece.type.toUpperCase(); const ch=pieceUnicode[key]; const span=document.createElement('span'); span.className=`piece ${piece.color==='w'?'white':'black'}`; span.textContent=ch; sqEl.appendChild(span); } sqEl.addEventListener('click', ()=>{ onPuzzleClick(sq); }); pb.appendChild(sqEl); } }
-      pb.style.display='grid'; pb.style.gridTemplateColumns='repeat(8,1fr)'; pb.style.gridTemplateRows='repeat(8,1fr)'; pb.style.aspectRatio='1'; pb.style.borderRadius='10px'; pb.style.overflow='hidden';
-    }
-    toast(`Puzzle Rating ${p.rating} - ${p.theme}`, 'info');
-  });
+function renderLobby() {
+  const el = document.getElementById('lobbyList');
+  if (!el) return;
+  const open = lobbies.filter((g) => g.status === 'waiting');
+  if (!open.length) { el.innerHTML = '<div class="empty-state" style="padding:14px">No open challenges. Create one and share the link.</div>'; return; }
+  el.innerHTML = open.map((g) => {
+    const mine = g.hostId === userId;
+    return `<div class="lobby-item">
+      <div><b>${mine ? 'Your challenge' : g.host}</b><div style="font-size:10px;color:var(--muted);margin-top:2px">${g.bet > 0 ? '$' + g.bet.toFixed(2) + ' stake' : 'Casual'} · ${g.timeControl} · ${g.rated ? 'rated' : 'unrated'}</div></div>
+      ${mine
+        ? `<button class="btn btn-small btn-outline" onclick="copyInvite('${g.id}')">Copy link</button>`
+        : `<button class="btn btn-small btn-cyan" onclick="joinFriendGame('${g.id}')">Join</button>`}
+    </div>`;
+  }).join('');
 }
-let puzzleSelected=null;
-let puzzleLegal=[];
-function onPuzzleClick(square){
-  if (!currentPuzzle) return;
-  const piece=puzzleChess.get(square);
-  if (puzzleSelected){
-    const move=puzzleLegal.find(m=>m.to===square);
-    if (move){
-      puzzleChess.move({ from:puzzleSelected, to:square, promotion:'q' });
-      renderBoard(); // re-render main board
-      // check solution
-      const moveUci=puzzleSelected+square;
-      if (currentPuzzle.solution.includes(moveUci) || currentPuzzle.solution[0]===moveUci){
-        toast('✅ Correct! +$0.10 +3 Elo', 'success');
-        socket.emit('solvePuzzle', { userId, puzzleId: currentPuzzle.id, moves: [moveUci] }, (res)=>{
-          if (res && res.correct) setTimeout(()=> nextPuzzle(), 1200);
-        });
-      } else {
-        toast(`❌ Wrong. Solution: ${currentPuzzle.solution.join(', ')}`, 'error');
-        setTimeout(()=>{ puzzleChess.load(currentPuzzle.fen); chess.load(currentPuzzle.fen); renderBoard(); }, 1000);
+window.joinFriendGame = (gameId) => {
+  socket.emit('joinFriendGame', { gameId, userId }, (res) => {
+    if (res && res.error) { toast(res.error, 'error'); if (/started|finished|not found/i.test(res.error)) spectateGame(gameId); }
+  });
+};
+window.copyInvite = (gameId) => {
+  const url = `${window.location.origin}${window.location.pathname}?invite=${gameId}`;
+  document.getElementById('shareLink').value = url;
+  openModal('shareModal');
+  navigator.clipboard?.writeText(url).then(() => toast('Invite link copied', 'success')).catch(() => {});
+};
+
+function handleUrlInvite() {
+  const params = new URLSearchParams(window.location.search);
+  const invite = params.get('invite');
+  const spectate = params.get('game');
+  if (invite) {
+    coachSay('Invite link detected — joining your friend’s game…');
+    socket.emit('joinFriendGame', { gameId: invite, userId }, (res) => {
+      if (res && res.error) {
+        // Game may already be running -> fall back to spectating
+        if (/started|finished|not found/i.test(res.error)) spectateGame(invite);
+        else toast(res.error, 'error');
       }
-      puzzleSelected=null; puzzleLegal=[];
+    });
+  } else if (spectate) {
+    spectateGame(spectate);
+  }
+}
+
+function spectateGame(gameId) {
+  socket.emit('spectateGame', { gameId }, (res) => {
+    if (res && res.error) toast('Game not found: ' + gameId, 'error');
+  });
+}
+
+function shareCurrentGame() {
+  if (!currentGame) return toast('No active game to share', 'error');
+  const url = `${window.location.origin}${window.location.pathname}?game=${currentGame.id}`;
+  document.getElementById('shareLink').value = url;
+  document.getElementById('shareModalSub').textContent = 'Spectator link — anyone can watch live';
+  document.getElementById('shareHint').textContent = 'Spectators see the board, clocks and chat live, but cannot move. Great for streaming high-stakes games.';
+  openModal('shareModal');
+}
+function copyShareLink() {
+  const input = document.getElementById('shareLink');
+  input.select();
+  navigator.clipboard?.writeText(input.value).then(() => toast('Link copied', 'success')).catch(() => {});
+}
+
+// ============ CONCIERGE CHAT ============
+function coachBubble(html, cls) {
+  const box = document.getElementById('coachChat');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = `chat-bubble ${cls}`;
+  div.innerHTML = html;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+function coachSay(text) {
+  const box = document.getElementById('coachChat');
+  if (!box) return;
+  const typing = document.createElement('div');
+  typing.className = 'typing-indicator';
+  typing.innerHTML = '<span></span><span></span><span></span>';
+  box.appendChild(typing);
+  box.scrollTop = box.scrollHeight;
+  setTimeout(() => {
+    typing.remove();
+    coachBubble(text, 'coach');
+  }, 550 + Math.random() * 400);
+}
+function userSay(text) { coachBubble(text, 'user'); }
+function coachGreet(u) {
+  const box = document.getElementById('coachChat');
+  if (!box || box.dataset.greeted) return;
+  box.dataset.greeted = '1';
+  coachBubble(`Hey <b>${u.username}</b> — welcome back. You're <b>${Math.round(u.rating || 1200)}${(u.stats?.ratedGames || 0) < 25 ? '?' : ''}</b> Elo. Want to climb the ladder, test a friend, or warm up with a free game?`, 'coach');
+}
+window.coachAction = (action) => {
+  const labels = {
+    engine: 'I want to play the engine',
+    friend: 'Invite a friend',
+    match: 'Quick match me',
+    free: 'Free practice',
+    rating: "What's my rating?",
+    deposit: 'Add funds',
+  };
+  userSay(labels[action] || action);
+  switch (action) {
+    case 'engine':
+      switchLeftTab('engine');
+      coachSay('Pick a strength tier — Easy (800) up to Grandmaster (2850) — set your stake, and hit <b>Play for stake</b>. Wins pay the multiplier shown; practice games are free.');
+      break;
+    case 'friend':
+      switchLeftTab('friend');
+      coachSay('Set a stake (or zero for casual), pick a time control, then press <b>Create invite link</b>. Send the link to your friend — they join the game the moment they open it.');
+      break;
+    case 'match':
+      switchLeftTab('match');
+      coachSay('Set your stake and hit <b>Find a match</b>. You will be paired with someone staking the same amount. Winner takes 90% of the pot.');
+      break;
+    case 'free':
+      coachSay('Starting a free practice game against the engine — your rating still moves, but no money is at stake.');
+      startEngineGame(true);
+      break;
+    case 'rating':
+      if (user) coachSay(`You are <b>${Math.round(user.rating)}${(user.stats?.ratedGames || 0) < 25 ? '?' : ''}</b> Elo with a record of <b>${user.stats?.wins || 0}–${user.stats?.losses || 0}–${user.stats?.draws || 0}</b>. ${(user.stats?.ratedGames || 0) < 25 ? 'Your rating is provisional — it will settle after 25 rated games.' : 'Beat stronger opponents to gain more rating.'}`);
+      break;
+    case 'deposit':
+      openModal('depositModal');
+      coachSay('Deposits use EcoCash, InnBucks, OneMoney, bank transfer or a cash agent. In sandbox mode everything settles automatically for testing.');
+      break;
+  }
+};
+document.querySelectorAll('#coachPills .pill').forEach((p) => p.addEventListener('click', () => coachAction(p.dataset.action)));
+
+// ============ PUZZLES ============
+function nextPuzzle() {
+  socket.emit('getPuzzle', null, (p) => {
+    if (!p) return;
+    currentPuzzle = p;
+    puzzleChess.load(p.fen);
+    chess.load(p.fen);
+    currentGame = null;
+    renderBoard();
+    document.getElementById('puzzleTheme').textContent = `Theme: ${p.theme}`;
+    document.getElementById('puzzleRating').textContent = p.rating;
+    document.getElementById('puzzleDesc').textContent = p.desc;
+    puzzleSelected = null; puzzleLegal = [];
+    renderPuzzleBoard();
+  });
+}
+function renderPuzzleBoard() {
+  const pb = document.getElementById('puzzleBoard');
+  if (!pb || !currentPuzzle) return;
+  buildBoard(pb, puzzleChess, {
+    readOnly: false,
+    selected: puzzleSelected,
+    legalMoves: puzzleLegal,
+    onClick: (sq) => onPuzzleClick(sq),
+    onPick: (sq) => onPuzzleClick(sq),
+    onDrop: (from, to) => { puzzleSelected = from; onPuzzleClick(to); },
+  });
+  applyBoardTheme();
+}
+function onPuzzleClick(square) {
+  if (!currentPuzzle) return;
+  const piece = puzzleChess.get(square);
+  if (puzzleSelected) {
+    const move = puzzleLegal.find((m) => m.to === square);
+    if (move) {
+      const uci = puzzleSelected + square;
+      puzzleChess.move({ from: puzzleSelected, to: square, promotion: 'q' });
+      renderPuzzleBoard();
+      if (currentPuzzle.solution[0] === uci) {
+        toast('Correct! Rating adjusted.', 'success');
+        socket.emit('solvePuzzle', { userId, puzzleId: currentPuzzle.id, moves: [uci], puzzleRating: user?.stats?.puzzleRating || 1200 }, () => setTimeout(nextPuzzle, 900));
+      } else {
+        toast(`Not quite — the solution begins ${currentPuzzle.solution[0].toUpperCase()}`, 'error');
+        setTimeout(() => { puzzleChess.load(currentPuzzle.fen); renderPuzzleBoard(); }, 900);
+      }
+      puzzleSelected = null; puzzleLegal = [];
       return;
     }
   }
-  if (piece && piece.color==='w'){
-    puzzleSelected=square;
-    puzzleLegal=puzzleChess.moves({ square, verbose:true });
-    renderBoard();
-  } else { puzzleSelected=null; puzzleLegal=[]; }
+  if (piece && piece.color === 'w') {
+    puzzleSelected = square;
+    puzzleLegal = puzzleChess.moves({ square, verbose: true });
+    renderPuzzleBoard();
+  } else { puzzleSelected = null; puzzleLegal = []; renderPuzzleBoard(); }
 }
-async function getPuzzleHint(){
+async function getPuzzleHint() {
   if (!currentPuzzle) return;
   let uci = currentPuzzle.solution[0];
-  if (engineClient){
+  if (engineClient) {
     const best = await engineClient.bestMove(puzzleChess.fen(), { movetimeMs: 600 });
     if (best) uci = best;
   }
   toast(`Hint: ${uci.toUpperCase()}`, 'info');
-  hintMove={ from: uci.substring(0,2), to: uci.substring(2,4) };
-  renderBoard();
+  hintMove = { from: uci.substring(0, 2), to: uci.substring(2, 4) };
+  renderPuzzleBoard();
 }
 
-// ========= LEADERBOARD =========
-function renderMiniLeaderboard(){
-  const el=document.getElementById('miniLeaderboard');
+// ============ LEADERBOARD ============
+function renderMiniLeaderboard() {
+  const el = document.getElementById('miniLeaderboard');
   if (!el) return;
-  if (!leaderboard || leaderboard.length===0){ el.innerHTML='<div class="empty-state">No GM slayers yet. Be first!</div>'; return; }
-  el.innerHTML=leaderboard.slice(0,5).map((l,i)=>`<div class="lb-item"><div style="display:flex;align-items:center;gap:8px"><span class="lb-rank">${i+1}</span><div><div class="lb-name">${l.username}</div><div class="lb-elo">${l.rating||800} Elo • ${l.winsVsGM||0} GM wins</div></div></div><div style="text-align:right"><div style="font-weight:700;color:var(--green)">$${(l.earnings||0).toFixed(2)}</div><div style="font-size:10px;color:var(--muted)">Best $${(l.highestWin||0).toFixed(2)}</div></div></div>`).join('');
+  if (!leaderboard || !leaderboard.length) { el.innerHTML = '<div class="empty-state">No rated games yet — be the first on the board.</div>'; return; }
+  el.innerHTML = leaderboard.slice(0, 5).map((l, i) => `
+    <div class="lb-item">
+      <div style="display:flex;align-items:center;gap:10px;min-width:0">
+        <span class="lb-rank">${i + 1}</span>
+        <div style="min-width:0"><div class="lb-name">${l.username}${l.provisional ? ' <span style="color:var(--faint)">?</span>' : ''}</div><div class="lb-elo">${l.wins || 0}–${l.losses || 0}–${l.draws || 0}</div></div>
+      </div>
+      <div style="text-align:right"><div style="font-weight:800;color:var(--cyan)">${Math.round(l.rating || 1200)}</div><div style="font-size:10px;color:var(--muted)">$${(l.earnings || 0).toFixed(0)} won</div></div>
+    </div>`).join('');
 }
-function renderFullLeaderboard(){
-  const el=document.getElementById('fullLeaderboard');
-  const gmEl=document.getElementById('gmSlayers');
+function renderFullLeaderboard() {
+  const el = document.getElementById('fullLeaderboard');
+  const gmEl = document.getElementById('gmSlayers');
   if (!el) return;
-  if (!leaderboard || leaderboard.length===0){ el.innerHTML='<div class="empty-state">No players yet</div>'; return; }
-  el.innerHTML=leaderboard.map((l,i)=>`<div class="lb-item"><div style="display:flex;align-items:center;gap:10px"><span class="lb-rank">#${i+1}</span><div class="player-avatar" style="width:28px;height:28px;font-size:12px">${l.username[0]}</div><div><div class="lb-name">${l.username}</div><div class="lb-elo">Rating ${l.rating||800} • GM wins ${l.winsVsGM||0}</div></div></div><div style="text-align:right"><b style="color:var(--green)">$${(l.earnings||0).toFixed(2)}</b><div style="font-size:10px">${l.lastWin?new Date(l.lastWin).toLocaleDateString():''}</div></div></div>`).join('');
-  if (gmEl){
-    const gmOnly=leaderboard.filter(l=> (l.winsVsGM||0)>0);
-    gmEl.innerHTML=gmOnly.length? gmOnly.map((l,i)=>`<div class="lb-item"><span>🏆 ${l.username} - ${l.winsVsGM} GM wins</span><b>$${(l.earnings||0).toFixed(2)}</b></div>`).join('') : '<div class="empty-state">No one beat Grandmaster yet. Prize is $10 + jackpot!</div>';
+  if (!leaderboard || !leaderboard.length) { el.innerHTML = '<div class="empty-state">No players yet.</div>'; return; }
+  el.innerHTML = leaderboard.map((l, i) => `
+    <div class="lb-item">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="lb-rank">#${i + 1}</span>
+        <div class="player-avatar" style="width:30px;height:30px;font-size:12px">${(l.username || '?')[0]}</div>
+        <div><div class="lb-name">${l.username}${l.provisional ? ' <span style="color:var(--faint)">?</span>' : ''}</div><div class="lb-elo">${l.wins || 0}W · ${l.losses || 0}L · ${l.draws || 0}D${l.winsVsGM ? ` · 🏆 ${l.winsVsGM} GM` : ''}</div></div>
+      </div>
+      <div style="text-align:right"><b style="color:var(--cyan);font-size:14px">${Math.round(l.rating || 1200)}</b><div style="font-size:10px;color:var(--muted)">$${(l.earnings || 0).toFixed(2)} earned</div></div>
+    </div>`).join('');
+  if (gmEl) {
+    const gmOnly = leaderboard.filter((l) => (l.winsVsGM || 0) > 0);
+    gmEl.innerHTML = gmOnly.length
+      ? gmOnly.map((l) => `<div class="lb-item"><span>🏆 ${l.username}</span><b style="color:var(--violet)">${l.winsVsGM} × Grandmaster beaten</b></div>`).join('')
+      : '<div class="empty-state">Nobody has beaten the Grandmaster yet. $10 bonus + jackpot share awaits.</div>';
   }
 }
 
-// ========= GAME OVER DISPLAY =========
-function showEngineOver(result, outcome, payout, multiplier, game){
-  const overlay=document.createElement('div'); overlay.className='game-overlay';
-  overlay.innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px;max-width:340px;text-align:center"><div style="font-size:44px">${outcome==='win'?'🏆':outcome==='loss'?'😢':'🤝'}</div><h3 style="margin:8px 0;font-weight:800;color:${outcome==='win'?'var(--green)':''}">${outcome==='win'?'You Won!':outcome==='loss'?'You Lost':'Draw'}</h3><p style="font-size:12px;color:var(--muted)">${result}</p>${outcome==='win'&&!game.isFree?`<div style="background:rgba(129,182,76,.12);border:1px solid rgba(129,182,76,.3);border-radius:10px;padding:12px;margin:12px 0"><div style="font-size:10px;color:var(--muted)">WON vs ${game.difficultyConfig.label} ${multiplier}x</div><div style="font-size:26px;font-weight:800;color:var(--green)">+$${payout.toFixed(2)}</div><div style="font-size:10px;color:var(--muted)">${payout>game.bet*game.difficultyConfig.multiplier ? '🎰 JACKPOT INCLUDED!' : 'Added to wallet'}</div></div>`:''}${outcome==='loss'&&!game.isFree?`<div style="background:rgba(224,90,71,.08);border-radius:10px;padding:10px;margin:10px 0;font-size:11px">Lost $${game.bet.toFixed(2)} • Jackpot +$${(game.bet*0.02).toFixed(2)}</div>`:''}<button class="btn btn-green" style="width:100%;margin-top:10px" onclick="this.parentElement.parentElement.remove()">Continue</button><button class="btn btn-outline" style="width:100%;margin-top:6px" onclick="this.parentElement.parentElement.remove(); startEngineGame(${game.isFree})">↻ Play Again</button></div>`;
+// ============ GAME OVER OVERLAYS ============
+function showEngineOver(result, outcome, payout, multiplier, game) {
+  hideEngineThinking();
+  const overlay = document.createElement('div');
+  overlay.className = 'game-overlay';
+  const isWin = outcome === 'win';
+  const isDraw = outcome === 'draw';
+  overlay.innerHTML = `
+    <div style="background:var(--glass-strong);backdrop-filter:blur(20px);border:1px solid var(--hairline-strong);border-radius:20px;padding:26px;max-width:360px;text-align:center;box-shadow:0 40px 90px -30px rgba(0,0,0,.9)">
+      <div style="font-size:46px">${isWin ? '🏆' : isDraw ? '🤝' : '♟️'}</div>
+      <h3 style="margin:10px 0;font-weight:900;font-size:20px;color:${isWin ? 'var(--green)' : 'var(--text)'}">${isWin ? 'Victory' : isDraw ? 'Draw' : 'Defeat'}</h3>
+      <p style="font-size:12.5px;color:var(--muted);line-height:1.6">${result}</p>
+      ${lastRatingDelta != null ? `<div style="margin-top:12px;font-size:13px;font-weight:800;color:${lastRatingDelta > 0 ? 'var(--green)' : lastRatingDelta < 0 ? 'var(--red)' : 'var(--muted)'}">Rating ${lastRatingDelta > 0 ? '+' : ''}${lastRatingDelta}</div>` : ''}
+      ${isWin && !game.isFree ? `<div style="background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);border-radius:14px;padding:14px;margin:14px 0"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Won vs ${game.difficultyConfig?.label || 'engine'} · ${multiplier}×</div><div style="font-size:28px;font-weight:900;color:var(--green)">+$${Number(payout).toFixed(2)}</div></div>` : ''}
+      <button class="btn btn-cyan" style="width:100%;margin-top:12px;padding:12px" onclick="this.closest('.game-overlay').remove()">Continue</button>
+      <button class="btn btn-outline" style="width:100%;margin-top:8px" onclick="this.closest('.game-overlay').remove();startEngineGame(${game.isFree})">↻ Play again</button>
+    </div>`;
   document.getElementById('board').appendChild(overlay);
-  if (outcome==='win' && !game.isFree) confetti();
+  if (isWin) sparkles();
 }
-function showGameOverPvp(game){
-  const isWinner = game.winner && ((game.winner==='w' && game.white.id===userId) || (game.winner==='b' && game.black.id===userId));
-  const overlay=document.createElement('div'); overlay.className='game-overlay';
-  overlay.innerHTML=`<div style="background:var(--card);border-radius:14px;padding:20px;max-width:340px;text-align:center;border:1px solid var(--border)"><div style="font-size:40px">${isWinner?'🏆':game.winner==='draw'?'🤝':'😢'}</div><h3>${game.winner==='draw'?'Draw!': isWinner?'You Won!':'You Lost'}</h3><p style="font-size:12px;color:var(--muted);margin:8px 0">${game.result}</p>${isWinner?`<div style="font-size:22px;font-weight:800;color:var(--green)">Pot won!</div>`:''}<button class="btn btn-green" style="width:100%;margin-top:12px" onclick="this.parentElement.parentElement.remove(); currentGame=null; renderBoard(); renderGameInfo()">Close</button></div>`;
+function showGameOverPvp(game) {
+  const myColor = myColorIn(game);
+  const isWinner = game.winner && game.winner === myColor;
+  const isDraw = game.winner === 'draw';
+  const overlay = document.createElement('div');
+  overlay.className = 'game-overlay';
+  overlay.innerHTML = `
+    <div style="background:var(--glass-strong);backdrop-filter:blur(20px);border:1px solid var(--hairline-strong);border-radius:20px;padding:26px;max-width:360px;text-align:center">
+      <div style="font-size:46px">${isWinner ? '🏆' : isDraw ? '🤝' : '♟️'}</div>
+      <h3 style="margin:10px 0;font-weight:900;font-size:20px;color:${isWinner ? 'var(--green)' : 'var(--text)'}">${isWinner ? 'You won!' : isDraw ? 'Draw' : 'You lost'}</h3>
+      <p style="font-size:12.5px;color:var(--muted);line-height:1.6;margin:6px 0">${game.result || ''}</p>
+      ${lastRatingDelta != null ? `<div style="margin-top:10px;font-size:13px;font-weight:800;color:${lastRatingDelta > 0 ? 'var(--green)' : lastRatingDelta < 0 ? 'var(--red)' : 'var(--muted)'}">Rating ${lastRatingDelta > 0 ? '+' : ''}${lastRatingDelta}</div>` : ''}
+      <button class="btn btn-cyan" style="width:100%;margin-top:14px;padding:12px" onclick="this.closest('.game-overlay').remove();resetBoard()">Close</button>
+    </div>`;
   document.getElementById('board').appendChild(overlay);
-  if (isWinner) confetti();
+  if (isWinner) sparkles();
 }
-function confetti(){
-  for (let i=0;i<16;i++){ setTimeout(()=>{ const el=document.createElement('div'); el.textContent='💸'; el.style.position='fixed'; el.style.left=Math.random()*100+'vw'; el.style.top='-10px'; el.style.fontSize='20px'; el.style.zIndex='500'; el.style.animation='fall 2s linear forwards'; document.body.appendChild(el); setTimeout(()=>el.remove(),2000); }, i*80); }
-}
-
-// ========= MISC =========
-function flipBoard(){ boardOrientation = boardOrientation==='white'?'black':'white'; renderBoard(); }
-async function getHint(){
-  if (!currentGame || currentGame.status!=='playing') return toast('Start a game first','error');
-  if (!engineClient) return toast('Engine loading...','info');
-  toast('Asking Stockfish for the best move...','info');
-  const uci = await engineClient.bestMove(chess.fen(), { movetimeMs: 800 });
-  if (!uci) return toast('Engine unavailable - try again','error');
-  hintMove={ from: uci.substring(0,2), to: uci.substring(2,4) };
-  renderBoard();
-  const move = chess.move({ from: hintMove.from, to: hintMove.to, promotion: uci.length>4?uci[4]:'q' });
-  const san = move ? move.san : `${hintMove.from}→${hintMove.to}`;
-  if (move) chess.undo();
-  toast(`Hint: ${san}`,'success');
-}
-function undoMove(){
-  // Every game is played on the server now, so undoing locally would desync the
-  // board from the authoritative game state (and defeat anti-cheat).
-  if (currentGame && currentGame.type) return toast('Undo is disabled in server games','info');
-  if (chess.history().length<2) return toast('Nothing to undo','error');
-  chess.undo(); chess.undo();
-  renderBoard(); renderMovesLocal();
-}
-function resetBoard(){ chess.reset(); currentGame=null; hintMove=null; selectedSquare=null; legalMoves=[]; renderBoard(); renderGameInfo(); document.getElementById('movesPanel').innerHTML=''; }
-function resignGame(){
-  if (!currentGame || currentGame.status!=='playing') return toast('No game','error');
-  if (confirm('Resign? Lose bet if bet game.')){
-    if (currentGame.type==='pvp_bet'){
-      socket.emit('resignPvp', { userId, gameId: currentGame.id });
-      // For now treat as engine resign
-      socket.emit('engineGameOver', { userId, gameId: currentGame.id, result:'resign' });
-    } else {
-      socket.emit('engineGameOver', { userId, gameId: currentGame.id, result:'resign' });
-    }
-    currentGame.status='finished';
+function sparkles() {
+  const glyphs = ['✦', '✧', '★'];
+  for (let i = 0; i < 14; i++) {
+    setTimeout(() => {
+      const el = document.createElement('div');
+      el.className = 'sparkle';
+      el.textContent = glyphs[i % glyphs.length];
+      el.style.left = Math.random() * 100 + 'vw';
+      el.style.color = ['#22d3ee', '#34d399', '#fbbf24'][i % 3];
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2400);
+    }, i * 70);
   }
 }
-function offerDraw(){ toast('Draw offer sent - opponent declined (for demo)','info'); }
-function createCustomGame(){
-  const bet=parseFloat(document.getElementById('customBet').value)||1;
-  if (user.balance < bet){ toast(`Need $${bet}`,'error'); openModal('depositModal'); return; }
-  socket.emit('createGame', { userId, bet, timeControl: document.getElementById('customTime').value }, (res)=>{ if (res&&res.error) toast(res.error,'error'); else toast(`Private game ${res.gameId} created! Share link`,`success`); });
-}
-function sendChat(){
-  const inp=document.getElementById('chatInput');
-  const msg=inp.value.trim(); if (!msg) return;
-  addChatMsg(`${user.username}: ${msg}`, 'user');
-  inp.value='';
-}
-function addChatMsg(msg, type){
-  const el=document.getElementById('chatMessages');
-  const div=document.createElement('div'); div.className=`chat-msg ${type}`; div.textContent=msg;
-  el.appendChild(div); el.scrollTop=el.scrollHeight;
-}
-function openModal(id){ document.getElementById(id).classList.add('active'); }
-function closeModal(id){ document.getElementById(id).classList.remove('active'); }
-document.querySelectorAll('.modal-backdrop').forEach(bg=> bg.addEventListener('click', e=>{ if (e.target===bg) bg.classList.remove('active'); }));
-function setDeposit(a){ document.getElementById('depositAmount').value=a.toFixed(2); }
 
-// ---------- PAYMENTS (EcoCash / InnBucks / OneMoney / Bank / Agent) ----------
-const PROVIDER_ICONS = { ecocash:'📱', innbucks:'💳', onemoney:'📲', bank:'🏦', agent:'🤝', mock:'🧪' };
+// ============ CHAT ============
+function sendChat() {
+  const inp = document.getElementById('chatInput');
+  const msg = inp.value.trim();
+  if (!msg) return;
+  addChatMsg(`${user?.username || 'You'}: ${msg}`, 'user');
+  socket.emit('sendChat', { gameId: currentGame?.id, message: msg, userId });
+  inp.value = '';
+}
+function addChatMsg(msg, type) {
+  const el = document.getElementById('chatMessages');
+  if (!el) return;
+  const div = document.createElement('div');
+  div.className = `chat-msg ${type}`;
+  div.textContent = msg;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ============ MODALS / PROFILE ============
+function openModal(id) { document.getElementById(id).classList.add('active'); }
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+document.querySelectorAll('.modal-backdrop').forEach((bg) => bg.addEventListener('click', (e) => { if (e.target === bg) bg.classList.remove('active'); }));
+function setDeposit(a) { document.getElementById('depositAmount').value = a.toFixed(2); }
+function saveProfile() {
+  const n = document.getElementById('usernameInput').value.trim();
+  if (!n || n.length < 3) return toast('Username must be at least 3 characters', 'error');
+  username = n;
+  localStorage.setItem('chessUsername', n);
+  socket.emit('register', { userId, username: n });
+  toast(`Username saved: ${n}`, 'success');
+  closeModal('profileModal');
+}
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.style.borderLeftColor = type === 'error' ? 'var(--red)' : type === 'success' ? 'var(--green)' : 'var(--cyan)';
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 4200);
+}
+
+// ============ PAYMENTS ============
+const PROVIDER_ICONS = { ecocash: '📱', innbucks: '💳', onemoney: '📲', bank: '🏦', agent: '🤝', mock: '🧪' };
 let paymentProviders = [];
 let depositProvider = 'ecocash';
 let withdrawProvider = 'ecocash';
 let depositPollTimer = null;
 
-async function loadPaymentProviders(){
-  try{
-    const data = await fetch('/api/payments/providers').then(r=>r.json());
-    paymentProviders = (data.providers||[]).filter(p=> p.id !== 'mock');
-    if (!paymentProviders.length) paymentProviders = [{ id:'ecocash', label:'EcoCash', kind:'mobile_money', minAmount:0.5, maxAmount:2000, sandbox:true }];
-    depositProvider = paymentProviders.some(p=>p.id==='ecocash') ? 'ecocash' : paymentProviders[0].id;
+async function loadPaymentProviders() {
+  try {
+    const data = await fetch('/api/payments/providers').then((r) => r.json());
+    paymentProviders = (data.providers || []).filter((p) => p.id !== 'mock');
+    if (!paymentProviders.length) paymentProviders = [{ id: 'ecocash', label: 'EcoCash', kind: 'mobile_money', minAmount: 0.5, maxAmount: 2000, sandbox: true }];
+    depositProvider = paymentProviders.some((p) => p.id === 'ecocash') ? 'ecocash' : paymentProviders[0].id;
     withdrawProvider = depositProvider;
-
-    const badge=document.getElementById('ecoModeBadge');
-    if (badge) badge.textContent = data.mode === 'live' ? 'LIVE MODE' : 'SANDBOX MODE';
-
+    const badge = document.getElementById('ecoModeBadge');
+    if (badge) badge.textContent = data.mode === 'live' ? 'LIVE' : 'SANDBOX';
     renderProviderGrid('depositProviders', depositProvider, 'selectDepositProvider');
     renderProviderGrid('withdrawProviders', withdrawProvider, 'selectWithdrawProvider');
     syncProviderForms();
-  }catch(e){ console.warn('providers unavailable', e.message); }
+  } catch (e) { console.warn('providers unavailable', e.message); }
 }
-
-function renderProviderGrid(containerId, activeId, handler){
-  const el=document.getElementById(containerId);
+function renderProviderGrid(containerId, activeId, handler) {
+  const el = document.getElementById(containerId);
   if (!el) return;
-  el.innerHTML = paymentProviders.map(p=>`
-    <div class="method-card ${p.id===activeId?'active':''}" data-provider="${p.id}" onclick="${handler}('${p.id}')">
-      ${PROVIDER_ICONS[p.id]||'💰'} ${p.label}${p.sandbox?' <span style="font-size:9px;opacity:.7">sandbox</span>':''}
-    </div>`).join('');
+  el.innerHTML = paymentProviders.map((p) =>
+    `<div class="method-card ${p.id === activeId ? 'active' : ''}" onclick="${handler}('${p.id}')">${PROVIDER_ICONS[p.id] || '💰'} ${p.label}${p.sandbox ? ' <span style="font-size:9px;opacity:.7">sandbox</span>' : ''}</div>`).join('');
 }
-
-function selectDepositProvider(id){
-  depositProvider=id;
-  renderProviderGrid('depositProviders', id, 'selectDepositProvider');
-  syncProviderForms();
-}
-function selectWithdrawProvider(id){
-  withdrawProvider=id;
-  window.withdrawMethod=id;
-  renderProviderGrid('withdrawProviders', id, 'selectWithdrawProvider');
-  syncProviderForms();
-}
-function selectWithdrawMethod(el){ if (el && el.dataset && el.dataset.provider) selectWithdrawProvider(el.dataset.provider); }
-
-function syncProviderForms(){
-  const phoneGroup=document.getElementById('depositPhoneGroup');
-  const ecoForm=document.getElementById('ecoWithdrawForm');
-  const bankForm=document.getElementById('bankWithdrawForm');
-  const needsPhone = p => p==='ecocash'||p==='innbucks'||p==='onemoney'||p==='agent';
+function selectDepositProvider(id) { depositProvider = id; renderProviderGrid('depositProviders', id, 'selectDepositProvider'); syncProviderForms(); }
+function selectWithdrawProvider(id) { withdrawProvider = id; renderProviderGrid('withdrawProviders', id, 'selectWithdrawProvider'); syncProviderForms(); }
+function syncProviderForms() {
+  const phoneGroup = document.getElementById('depositPhoneGroup');
+  const ecoForm = document.getElementById('ecoWithdrawForm');
+  const bankForm = document.getElementById('bankWithdrawForm');
+  const needsPhone = (p) => p === 'ecocash' || p === 'innbucks' || p === 'onemoney' || p === 'agent';
   if (phoneGroup) phoneGroup.style.display = needsPhone(depositProvider) ? 'block' : 'none';
   if (ecoForm) ecoForm.style.display = needsPhone(withdrawProvider) ? 'block' : 'none';
-  if (bankForm) bankForm.style.display = withdrawProvider==='bank' ? 'block' : 'none';
+  if (bankForm) bankForm.style.display = withdrawProvider === 'bank' ? 'block' : 'none';
 }
-
-function setDepositStatus(html, show=true){
-  const el=document.getElementById('depositStatus');
+function setDepositStatus(html, show = true) {
+  const el = document.getElementById('depositStatus');
   if (!el) return;
   el.style.display = show ? 'block' : 'none';
   el.innerHTML = html;
 }
-
-/** Poll a transaction until it settles so the user sees real progress. */
-function watchTransaction(reference, { onDone } = {}){
+function watchTransaction(reference, { onDone } = {}) {
   clearInterval(depositPollTimer);
-  let tries=0;
-  depositPollTimer=setInterval(async ()=>{
-    if (tries++ > 60){ clearInterval(depositPollTimer); return; }
-    try{
-      const tx=await fetch(`/api/payments/${reference}`).then(r=>r.json());
+  let tries = 0;
+  depositPollTimer = setInterval(async () => {
+    if (tries++ > 60) { clearInterval(depositPollTimer); return; }
+    try {
+      const tx = await fetch(`/api/payments/${reference}`).then((r) => r.json());
       if (!tx || !tx.reference) return;
-      setDepositStatus(`<b>${tx.type.toUpperCase()} ${tx.reference}</b><br>Status: <b style="color:${tx.status==='completed'?'var(--green)':tx.status==='failed'?'var(--red)':'var(--yellow)'}">${tx.status}</b> • $${Number(tx.amount).toFixed(2)} via ${tx.provider}${tx.instructions?`<br><span style="color:var(--muted)">${tx.instructions}</span>`:''}`);
-      if (['completed','failed','expired','rejected','cancelled'].includes(tx.status)){
+      setDepositStatus(`<b>${tx.type.toUpperCase()} ${tx.reference}</b><br>Status: <b style="color:${tx.status === 'completed' ? 'var(--green)' : tx.status === 'failed' ? 'var(--red)' : 'var(--amber)'}">${tx.status}</b> · $${Number(tx.amount).toFixed(2)} via ${tx.provider}`);
+      if (['completed', 'failed', 'expired', 'rejected', 'cancelled'].includes(tx.status)) {
         clearInterval(depositPollTimer);
         if (onDone) onDone(tx);
       }
-    }catch(e){ /* keep polling */ }
+    } catch (e) { /* keep polling */ }
   }, 1200);
 }
-
-function doDeposit(){
-  const amount=parseFloat(document.getElementById('depositAmount').value);
-  const phone=document.getElementById('ecoPhone').value.trim();
-  if (isNaN(amount)||amount<0.5) return toast('Min $0.50','error');
-  if (phone && phone.length<9) return toast('Enter a valid wallet number','error');
-  const btn=document.getElementById('depositBtn'); btn.textContent='⏳...'; btn.disabled=true;
+function doDeposit() {
+  const amount = parseFloat(document.getElementById('depositAmount').value);
+  const phone = document.getElementById('ecoPhone').value.trim();
+  if (isNaN(amount) || amount < 0.5) return toast('Minimum deposit is $0.50', 'error');
+  if (phone && phone.replace(/\D/g, '').length < 9) return toast('Enter a valid wallet number', 'error');
+  const btn = document.getElementById('depositBtn');
+  btn.textContent = '⏳ …'; btn.disabled = true;
   setDepositStatus(`Sending $${amount.toFixed(2)} request to <b>${depositProvider}</b>…`);
-  socket.emit('deposit',{ userId, amount, phone, provider: depositProvider }, (res)=>{
-    btn.textContent='Deposit'; btn.disabled=false;
-    if (res&&res.error){ toast(res.error,'error'); setDepositStatus(`<span style="color:var(--red)">${res.error}</span>`); return; }
-    const tx=res.transaction;
-    toast(`${depositProvider} request sent`,'success');
+  socket.emit('deposit', { userId, amount, phone, provider: depositProvider }, (res) => {
+    btn.textContent = 'Deposit'; btn.disabled = false;
+    if (res && res.error) { toast(res.error, 'error'); setDepositStatus(`<span style="color:var(--red)">${res.error}</span>`); return; }
+    const tx = res.transaction;
+    toast(`${depositProvider} request sent`, 'success');
     if (!tx) return;
-    watchTransaction(tx.reference, { onDone: (t)=>{
-      if (t.status==='completed'){
-        toast(`+$${Number(t.amount).toFixed(2)} added to your wallet`,'success');
-        setTimeout(()=> closeModal('depositModal'), 900);
-      } else {
-        toast(`Deposit ${t.status}`,'error');
-      }
-    }});
+    watchTransaction(tx.reference, {
+      onDone: (t) => {
+        if (t.status === 'completed') { toast(`+$${Number(t.amount).toFixed(2)} added to your wallet`, 'success'); setTimeout(() => closeModal('depositModal'), 900); }
+        else toast(`Deposit ${t.status}`, 'error');
+      },
+    });
   });
 }
-
-function doWithdraw(){
-  const amount=parseFloat(document.getElementById('withdrawAmount').value);
-  if (isNaN(amount)||amount<1) return toast('Min $1','error');
-  if (user && user.balance<amount) return toast('Insufficient balance','error');
-  let account='';
-  if (withdrawProvider==='bank'){
-    const bank=document.getElementById('bankName').value;
-    const acc=document.getElementById('bankAccount').value.trim();
-    if(!acc) return toast('Enter account number','error');
-    account=`${bank} - ${acc}`;
+function doWithdraw() {
+  const amount = parseFloat(document.getElementById('withdrawAmount').value);
+  if (isNaN(amount) || amount < 1) return toast('Minimum withdrawal is $1', 'error');
+  if (user && user.balance < amount) return toast('Insufficient balance', 'error');
+  let account = '';
+  if (withdrawProvider === 'bank') {
+    const bank = document.getElementById('bankName').value;
+    const acc = document.getElementById('bankAccount').value.trim();
+    if (!acc) return toast('Enter an account number', 'error');
+    account = `${bank} - ${acc}`;
   } else {
-    account=document.getElementById('withdrawPhone').value.trim();
-    if(!account) return toast('Enter wallet number','error');
+    account = document.getElementById('withdrawPhone').value.trim();
+    if (!account || account.replace(/\D/g, '').length < 9) return toast('Enter a valid wallet number', 'error');
   }
-  socket.emit('withdraw',{ userId, amount, provider: withdrawProvider, accountDetails: account, phone: account }, (res)=>{
-    if (res&&res.error) return toast(res.error,'error');
-    toast(`Withdraw $${amount.toFixed(2)} via ${withdrawProvider} submitted`,'success');
+  socket.emit('withdraw', { userId, amount, provider: withdrawProvider, accountDetails: account, phone: account }, (res) => {
+    if (res && res.error) return toast(res.error, 'error');
+    toast(`Withdrawal of $${amount.toFixed(2)} via ${withdrawProvider} submitted`, 'success');
     closeModal('withdrawModal');
-    if (res.transaction) watchTransaction(res.transaction.reference, { onDone: (t)=> toast(`Withdrawal ${t.status}`, t.status==='completed'?'success':'error') });
+    if (res.transaction) watchTransaction(res.transaction.reference, { onDone: (t) => toast(`Withdrawal ${t.status}`, t.status === 'completed' ? 'success' : 'error') });
   });
 }
 
-function saveProfile(){
-  const n=document.getElementById('usernameInput').value.trim();
-  if (!n||n.length<3) return toast('Min 3','error');
-  username=n; localStorage.setItem('chessUsername',n); socket.emit('register',{userId,username:n}); toast(`Username ${n}`,'success'); closeModal('profileModal');
-}
-function toast(msg,type='info'){
-  const c=document.getElementById('toastContainer'); const t=document.createElement('div'); t.className='toast'; t.style.borderLeft=`4px solid ${type==='error'?'var(--red)':type==='success'?'var(--green)':'var(--yellow)'}`; t.textContent=msg; c.appendChild(t); setTimeout(()=>t.remove(),4000);
-}
-function toggleEngine(){ analysisEnabled=!analysisEnabled; toast(analysisEnabled?'Engine ON':'Engine OFF','info'); if (analysisEnabled && currentGame) requestEvaluation(currentGame.fen); }
-function openAnalysis(){ switchRightTab('analysis'); }
-async function showSolution(){
-  if (!currentGame) return;
-  if (engineClient && typeof chess !== 'undefined'){
-    const best = await engineClient.bestMove(chess.fen(), { movetimeMs: 700 });
-    if (best) return toast(`Stockfish plays ${best.toUpperCase()}`, 'info');
-  }
-  toast(`Best line: ${currentEval.pv||'Calculating...'}`, 'info');
-}
-
-// Init
-renderBoard();
-initEngineClient();
-document.querySelectorAll('.nav-link').forEach(link=> link.addEventListener('click',()=> switchPage(link.dataset.page)));
-const st=document.createElement('style'); st.textContent='@keyframes fall{to{transform:translateY(110vh) rotate(360deg)}}'; document.head.appendChild(st);
-
-// Add missing server handler for llmEngineMove (client only, server will handle via engineReply for llm too)
-// Patch server to accept it - it already does if we emit engineReply with llm game, but let's add listener
-socket.on('llmEngineMove', ()=>{}); // placeholder
-
-
-// ========== NEW FEATURES 1-7 ADDITIONS ==========
-
-// 4. PHONE OTP LOGIN
-function requestOTP(){
+// ============ PHONE OTP ============
+function requestOTP() {
   const phone = document.getElementById('otpPhone').value.trim();
-  if (!phone || phone.length<9){ toast('Enter valid EcoCash number 077...', 'error'); return; }
-  const btn=document.getElementById('requestOtpBtn');
-  btn.textContent='⏳ Sending OTP...'; btn.disabled=true;
-  socket.emit('requestOTP', { phone }, (res)=>{
-    btn.textContent='📲 Send OTP via SMS'; btn.disabled=false;
-    if (res && res.error){ toast(res.error,'error'); return; }
-    toast(`OTP sent to ${phone} - Check console / demo code`, 'success');
-    document.getElementById('otpRequestSection').style.display='none';
-    document.getElementById('otpVerifySection').style.display='block';
-    document.getElementById('otpDemoCode').textContent = `DEMO CODE (remove in prod): ${res.code} - Also in server logs`;
+  if (!phone || phone.replace(/\D/g, '').length < 9) return toast('Enter a valid mobile number (07…)', 'error');
+  const btn = document.getElementById('requestOtpBtn');
+  btn.textContent = '⏳ Sending…'; btn.disabled = true;
+  socket.emit('requestOTP', { phone }, (res) => {
+    btn.textContent = '📲 Send verification code'; btn.disabled = false;
+    if (res && res.error) return toast(res.error, 'error');
+    toast(`Verification code sent to ${phone}`, 'success');
+    document.getElementById('otpRequestSection').style.display = 'none';
+    document.getElementById('otpVerifySection').style.display = 'block';
+    if (res.code) document.getElementById('otpDemoCode').textContent = `Sandbox code: ${res.code}`;
     document.getElementById('otpCode').focus();
   });
 }
-
-function verifyOTP(){
-  const phone=document.getElementById('otpPhone').value.trim();
-  const code=document.getElementById('otpCode').value.trim();
-  if (!code || code.length!==6){ toast('Enter 6-digit OTP','error'); return; }
-  socket.emit('verifyOTP', { phone, code }, (res)=>{
-    if (res && res.error){ toast(res.error,'error'); return; }
-    toast(`✅ Phone ${phone} verified! Wallet recovered. Balance $${res.user.balance.toFixed(2)}`, 'success');
-    userId=res.userId;
-    user=res.user;
+function verifyOTP() {
+  const phone = document.getElementById('otpPhone').value.trim();
+  const code = document.getElementById('otpCode').value.trim();
+  if (!code || code.length !== 6) return toast('Enter the 6-digit code', 'error');
+  socket.emit('verifyOTP', { phone, code }, (res) => {
+    if (res && res.error) return toast(res.error, 'error');
+    toast(`Phone ${phone} verified — wallet linked`, 'success');
+    userId = res.userId;
+    user = res.user;
     localStorage.setItem('chessUserId', userId);
-    document.getElementById('userIdDisplay').value=userId;
-    document.getElementById('usernameInput').value=res.user.username;
-    document.getElementById('headerAvatar').textContent=res.user.username[0].toUpperCase();
-    document.getElementById('profilePhone').value=res.user.phone;
+    document.getElementById('userIdDisplay').value = userId;
+    document.getElementById('usernameInput').value = res.user.username;
+    document.getElementById('headerAvatar').textContent = res.user.username[0].toUpperCase();
+    document.getElementById('profilePhone').value = res.user.phone;
     updateBalance(res.user.balance);
-    updateTransactions(res.user.transactions||[]);
+    updateTransactions(res.user.transactions || []);
+    updateStats(res.user.stats || {});
+    updateRatingUI();
     closeModal('otpModal');
-    document.getElementById('otpRequestSection').style.display='block';
-    document.getElementById('otpVerifySection').style.display='none';
-    document.getElementById('otpCode').value='';
+    document.getElementById('otpRequestSection').style.display = 'block';
+    document.getElementById('otpVerifySection').style.display = 'none';
+    document.getElementById('otpCode').value = '';
   });
 }
-
-socket.on('otpSent', ({ phone, expiresIn })=>{
-  toast(`OTP sent to ${phone} - expires in ${expiresIn}s`, 'info');
+socket.on('otpVerified', ({ phone }) => {
+  const pp = document.getElementById('profilePhone');
+  if (pp) pp.value = phone;
 });
 
-socket.on('otpVerified', ({ userId: uid, phone })=>{
-  toast(`Phone ${phone} verified - wallet linked`, 'success');
-  const pp=document.getElementById('profilePhone');
-  if (pp) pp.value=phone;
-});
-
-socket.on('clockUpdate', ({ clocks, turn })=>{
-  // clocks in seconds
-  if (clocks.w !== undefined) {
-    const wMin=Math.floor(clocks.w/60); const wSec=clocks.w%60;
-    const bMin=Math.floor(clocks.b/60); const bSec=clocks.b%60;
-    const wEl=document.getElementById('whiteTimer');
-    const bEl=document.getElementById('blackTimer');
-    if (wEl) wEl.textContent=`${wMin}:${wSec.toString().padStart(2,'0')}`;
-    if (bEl) bEl.textContent=`${bMin}:${bSec.toString().padStart(2,'0')}`;
-    if (clocks.w<=30) wEl.style.color='var(--red)';
-    if (clocks.b<=30) bEl.style.color='var(--red)';
-  }
-});
-
-socket.on('clockTick', ({ clocks, turn })=>{
-  // More granular tick - raw ms
-  if (clocks) {
-    // Update eval bar maybe
-  }
-});
-
-socket.on('spectating', ({ game, spectators })=>{
-  toast(`Spectating ${game.id} - ${spectators} watching`, 'info');
-  currentGame=game;
-  chess.load(game.fen);
-  boardOrientation='white';
-  renderBoard();
-  renderGameInfo();
-  renderMoves();
-  // Disable moves for spectator
-  selectedSquare=null; legalMoves=[];
-  document.getElementById('blackStatus').textContent=`Spectating • ${spectators} viewers • ${game.type}`;
-  document.getElementById('whiteStatus').textContent='Spectator mode - chat only';
-});
-
-socket.on('spectatorJoined', ({ count })=>{
-  const el=document.getElementById('blackStatus');
-  if (el && currentGame) el.textContent=`${count} spectators watching • Live`;
-});
-
-socket.on('chatMessage', ({ username: u, message, timestamp })=>{
-  addChatMsg(`${u}: ${message}`, 'user');
-});
-
-// 5. SPECTATOR + SHAREABLE LINKS
-function getGameIdFromUrl(){
-  const params=new URLSearchParams(window.location.search);
-  return params.get('game');
-}
-
-function spectateGameFromUrl(){
-  const gid=getGameIdFromUrl();
-  if (gid){
-    socket.emit('spectateGame', { gameId: gid }, (res)=>{
-      if (res && res.error){ toast('Game not found: '+gid,'error'); return; }
-      toast(`Joined as spectator: ${gid}`,'success');
-      history.replaceState(null,'',`?game=${gid}`);
-    });
-  }
-}
-
-function shareCurrentGame(){
-  if (!currentGame){ toast('No active game to share','error'); return; }
-  const url=`${window.location.origin}${window.location.pathname}?game=${currentGame.id}`;
-  document.getElementById('shareLink').value=url;
-  openModal('shareModal');
-}
-
-function copyShareLink(){
-  const input=document.getElementById('shareLink');
-  input.select();
-  navigator.clipboard.writeText(input.value).then(()=> toast('Link copied! Share it','success'));
-}
-
-// Auto check for ?game= on load
-window.addEventListener('load', ()=>{
-  setTimeout(()=> spectateGameFromUrl(), 800);
-});
-
-// Add share button to game info dynamically
-const origRenderGameInfo = renderGameInfo;
-renderGameInfo = function(){
-  origRenderGameInfo();
-  if (currentGame && currentGame.status==='playing'){
-    const gi=document.getElementById('gameInfo');
-    if (gi && !gi.querySelector('#shareBtn')){
-      const btn=document.createElement('button');
-      btn.id='shareBtn';
-      btn.className='btn btn-small btn-outline';
-      btn.style.marginTop='8px'; btn.style.width='100%';
-      btn.textContent='🔗 Share - Spectator Link';
-      btn.onclick=shareCurrentGame;
-      gi.appendChild(btn);
-    }
-  }
-};
-
-// 6. ECOCASH MODE BADGE
-async function checkPaymentStatus(){
-  try{
-    const data = await fetch('/api/payments/status').then(r=>r.json());
-    const badge=document.getElementById('ecoModeBadge');
-    if (badge) badge.textContent = data.mode === 'live' ? 'LIVE MODE - Real API' : 'SANDBOX - Auto settles';
-    const engine = await fetch('/api/engine/status').then(r=>r.json()).catch(()=>null);
-    if (engine && engine.engine === 'stockfish-18-lichess'){
-      setEngineStatus('Stockfish 18 ✓', 'Lichess engine (server)');
-    }
-  } catch(e){}
-}
-setTimeout(checkPaymentStatus, 1200);
-
-// Show OTP modal on first visit if no phone verified
-setTimeout(()=>{
-  const hasSeenOtp = localStorage.getItem('hasSeenOtp');
-  if (!hasSeenOtp && (!user || !user.phoneVerified)){
-    // Don't auto show, just hint
-    // openModal('otpModal');
-    localStorage.setItem('hasSeenOtp','1');
-  }
-}, 2000);
-
-// Override createCustomGame to also share link after creation
-const origCreateCustom = createCustomGame;
-createCustomGame = function(){
-  const bet=parseFloat(document.getElementById('customBet').value)||1;
-  if (user.balance < bet){ toast(`Need $${bet}`,'error'); openModal('depositModal'); return; }
-  socket.emit('createGame', { userId, bet, timeControl: document.getElementById('customTime').value }, (res)=>{
-    if (res&&res.error){ toast(res.error,'error'); return; }
-    toast(`Private game ${res.gameId} created! Share link copied`,'success');
-    const url=`${window.location.origin}${window.location.pathname}?game=${res.gameId}`;
-    navigator.clipboard.writeText(url).then(()=>{});
-    document.getElementById('shareLink').value=url;
-    openModal('shareModal');
-    currentGame=res.game;
-    chess.load(res.game.fen);
-    boardOrientation='white';
-    renderBoard(); renderGameInfo();
-  });
-};
-
+// ============ INIT ============
+renderBoard();
+applyBoardTheme();
+initEngineClient();
+document.querySelectorAll('.nav-link').forEach((link) => link.addEventListener('click', () => switchPage(link.dataset.page)));

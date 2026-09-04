@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BetChess ZW — Chess.com Style • Bet, Play, Train • Stockfish + LLM Arena • EcoCash</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<title>BetChess — Play Chess vs Engine or Friends · Stockfish 18 · EcoCash</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="/socket.io/socket.io.js"></script>
 <!-- chess.js is vendored from node_modules (npm run vendor) - no CDN dependency -->
@@ -13,23 +13,24 @@
   window.Chess = Chess;
 </script>
 </head>
-<body class="chesscom-theme">
+<body>
 
-<!-- Top Nav chess.com style -->
+<!-- ===================== TOP NAV ===================== -->
 <nav class="top-nav">
   <div class="nav-left">
     <div class="logo"><div class="logo-icon">♞</div><span>BetChess <b>ZW</b></span></div>
     <div class="nav-links">
-      <button class="nav-link active" data-page="play"><span>♟️</span> Play</button>
-      <button class="nav-link" data-page="puzzles"><span>🧩</span> Puzzles</button>
-      <button class="nav-link" data-page="llm"><span>🤖</span> LLM Arena</button>
-      <button class="nav-link" data-page="leaderboard"><span>🏆</span> Leaderboard</button>
-      <button class="nav-link" data-page="learn"><span>🎓</span> Learn</button>
+      <button class="nav-link active" data-page="play">Play</button>
+      <button class="nav-link" data-page="puzzles">Puzzles</button>
+      <button class="nav-link" data-page="leaderboard">Leaderboard</button>
     </div>
   </div>
   <div class="nav-right">
-    <div class="jackpot-pill" id="jackpotPill">🎰 Jackpot $1,250</div>
-    <div class="balance-card"><div><div class="balance-label">Wallet</div><div class="balance-value" id="balanceDisplay">$12.50</div></div><div class="bal-icon">$</div></div>
+    <div class="jackpot-pill" id="jackpotPill">Jackpot —</div>
+    <div class="balance-card">
+      <div><div class="balance-label">Wallet</div><div class="balance-value" id="balanceDisplay">$0.00</div></div>
+      <div class="bal-icon">$</div>
+    </div>
     <button class="btn btn-green" onclick="openModal('depositModal')">Deposit</button>
     <button class="btn btn-outline" onclick="openModal('withdrawModal')">Withdraw</button>
     <div class="player-avatar" id="headerAvatar" onclick="openModal('profileModal')">P</div>
@@ -37,201 +38,370 @@
 </nav>
 
 <div class="chesscom-layout">
-  <!-- LEFT SIDEBAR - like chess.com -->
+
+  <!-- ===================== LEFT SIDEBAR ===================== -->
   <aside class="left-sidebar">
 
-    <!-- QUICK MATCH - Bet Pairing like chess.com + added bet option -->
-    <div class="card play-card">
-      <div class="card-header">⚔️ Play • Bet Matchmaking</div>
+    <!-- Concierge / conversational planner -->
+    <div class="card" id="coachCard">
+      <div class="card-header"><span>♟️ Chess Concierge</span><span class="chip" id="coachStatus">online</span></div>
       <div class="card-body">
-        <div class="bet-slider-container">
-          <div class="input-label" style="display:flex;justify-content:space-between">Bet Amount <span style="color:var(--green);font-weight:800" id="quickBetLabel">$1.00</span></div>
-          <input type="range" id="quickBetSlider" min="0.5" max="20" step="0.5" value="1" class="bet-slider">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)"><span>$0.50</span><span>$20+</span></div>
-        </div>
-
-        <div class="play-buttons">
-          <button class="play-btn large" id="findMatchBtn" onclick="findMatch()"><span class="play-icon">⚡</span><div><b>Find Match - $<span id="findBetAmount">1.00</span></b><span>Pair with same bet instantly</span></div></button>
-          <div class="play-subgrid">
-            <button class="play-btn" onclick="switchLeftTab('stockfish')"><span>🤖</span> vs Computer</button>
-            <button class="play-btn" onclick="switchLeftTab('friend')"><span>👥</span> vs Friend</button>
-          </div>
-        </div>
-
-        <div class="search-status" id="searchStatus" style="display:none">
-          <div class="search-spinner"></div>
-          <div><b id="searchText">Searching $1.00 players...</b><div style="font-size:11px;color:var(--muted)" id="searchSub">12 players online • Average wait 8s</div></div>
-          <button class="btn btn-small btn-outline" onclick="cancelSearch()">Cancel</button>
-        </div>
-
-        <div style="margin-top:12px;background:var(--bg3);border-radius:10px;padding:10px;font-size:11px;line-height:1.4">
-          <b style="color:var(--text)">How bet pairing works:</b> Set your bet, click Find Match. System finds another player betting <b>exact same amount</b> (chess.com random pairing + bet filter). Winner takes 90% of pot. Draw = refund.
+        <div class="coach-chat" id="coachChat"></div>
+        <div class="quick-pills" id="coachPills">
+          <button class="pill" data-action="engine">⚔️ Play the engine</button>
+          <button class="pill" data-action="friend">🔗 Invite a friend</button>
+          <button class="pill" data-action="match">⚡ Quick match</button>
+          <button class="pill" data-action="free">🎯 Free practice</button>
+          <button class="pill" data-action="rating">📈 My rating</button>
+          <button class="pill" data-action="deposit">💳 Add funds</button>
         </div>
       </div>
     </div>
 
-    <!-- Left Tabs -->
-    <div class="card">
+    <!-- Play setup -->
+    <div class="card play-card">
       <div class="left-tabs">
-        <button class="left-tab active" data-tab="stockfish" onclick="switchLeftTab('stockfish')">🤖 Computer</button>
+        <button class="left-tab active" data-tab="engine" onclick="switchLeftTab('engine')">🤖 Engine</button>
         <button class="left-tab" data-tab="friend" onclick="switchLeftTab('friend')">👥 Friend</button>
-        <button class="left-tab" data-tab="llm" onclick="switchLeftTab('llm')">🧠 LLM</button>
+        <button class="left-tab" data-tab="match" onclick="switchLeftTab('match')">⚡ Match</button>
       </div>
 
-      <!-- STOCKFISH TAB -->
-      <div class="left-tab-content active" id="tab-stockfish">
+      <!-- VS ENGINE -->
+      <div class="left-tab-content active" id="tab-engine">
         <div class="card-body">
-          <div class="input-label">Bet vs Stockfish — Solo (No wait)</div>
+          <div class="input-label">Opponent strength</div>
           <div class="difficulty-grid" id="difficultyGrid"></div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
-            <div class="input-group"><div class="input-label">Bet</div><input class="input" id="betAmount" type="number" min="0.5" step="0.5" value="1.00"></div>
-            <div class="input-group"><div class="input-label">Color</div><select class="input" id="playerColor"><option value="w">White</option><option value="b">Black</option><option value="random">Random</option></select></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+            <div class="input-group" style="margin:0"><div class="input-label">Stake (USD)</div><input class="input" id="betAmount" type="number" min="0" step="0.5" value="1.00"></div>
+            <div class="input-group" style="margin:0"><div class="input-label">Play as</div><select class="input" id="playerColor"><option value="w">White</option><option value="b">Black</option><option value="random" selected>Random</option></select></div>
           </div>
 
-          <div class="pot-preview"><div><span>Bet</span><b id="betDisplay">$1.00</b></div><div><span>Mult</span><b id="multDisplay" style="color:var(--green)">2.5x</b></div><div><span>Win</span><b id="winDisplay" style="color:var(--green);font-size:16px">$2.25</b></div></div>
+          <div class="pot-preview">
+            <div><span>Stake</span><b id="betDisplay">$1.00</b></div>
+            <div><span>Payout</span><b id="multDisplay" style="color:var(--green)">2.5×</b></div>
+            <div><span>You win</span><b id="winDisplay" style="color:var(--green)">$2.25</b></div>
+          </div>
 
-          <button class="btn btn-green" style="width:100%;justify-content:center;padding:13px;margin-top:10px" onclick="startEngineGame(false)">💰 Bet vs Stockfish</button>
-          <button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:6px" onclick="startEngineGame(true)">🎮 Free Play vs Stockfish</button>
-
-          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap"><span class="chip" id="payoutBadge">Win 2.5x</span><span class="chip">🏆 15x GM + Jackpot</span></div>
+          <button class="btn btn-cyan" style="width:100%;padding:13px;margin-top:14px" onclick="startEngineGame(false)">⚔️ Play for stake</button>
+          <button class="btn btn-outline" style="width:100%;margin-top:8px" onclick="startEngineGame(true)">🎯 Free practice</button>
+          <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">
+            <span class="chip" id="payoutBadge">Win 2.5×</span>
+            <span class="chip">🏆 Master/GM pay up to 15×</span>
+          </div>
         </div>
       </div>
 
-      <!-- FRIEND / CUSTOM -->
+      <!-- VS FRIEND -->
       <div class="left-tab-content" id="tab-friend">
         <div class="card-body">
-          <div class="input-label">Create Private Bet Game</div>
-          <input class="input" id="customBet" type="number" value="2.00" min="0.5" step="0.5" placeholder="Bet amount">
-          <select class="input" id="customTime" style="margin-top:8px"><option value="5+0">5 min</option><option value="10+0" selected>10 min</option><option value="10+5">10+5</option></select>
-          <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="createCustomGame()">🔗 Create & Share Link</button>
-          <div style="margin-top:12px"><div class="input-label">Open Lobbies (Same Bet Pairing)</div><div class="lobby-list" id="lobbyList"></div></div>
+          <div class="input-label">Challenge a friend</div>
+          <div class="input-group" style="margin-top:8px"><div class="input-label">Stake per player (USD, 0 = casual)</div><input class="input" id="customBet" type="number" min="0" step="0.5" value="2.00"></div>
+          <div class="input-group"><div class="input-label">Time control</div>
+            <select class="input" id="customTime">
+              <option value="1+0">1 min bullet</option>
+              <option value="3+2">3+2 blitz</option>
+              <option value="5+0">5 min blitz</option>
+              <option value="10+0" selected>10 min rapid</option>
+              <option value="15+10">15+10 classical</option>
+              <option value="30+0">30 min classical</option>
+            </select>
+          </div>
+          <div class="input-group"><div class="input-label">Your colour</div>
+            <select class="input" id="friendColor"><option value="random" selected>Random</option><option value="w">White</option><option value="b">Black</option></select>
+          </div>
+          <button class="btn btn-cyan" style="width:100%;padding:12px" onclick="createFriendInvite()">🔗 Create invite link</button>
+
+          <div style="margin-top:16px"><div class="input-label">Open challenges</div><div class="lobby-list" id="lobbyList"></div></div>
         </div>
       </div>
 
-      <!-- LLM TAB -->
-      <div class="left-tab-content" id="tab-llm">
+      <!-- QUICK MATCH -->
+      <div class="left-tab-content" id="tab-match">
         <div class="card-body">
-          <div class="input-label">LLM Arena — Configure AI Agent</div>
-
-          <div class="config-panel">
-            <div class="input-group"><div class="input-label">Provider</div><select class="input" id="llmProvider" onchange="onProviderChange()"><option value="fallback">Demo (No Key - Stockfish Commentary)</option><option value="openai">OpenAI</option><option value="groq">Groq (Fast / Free)</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="openai-compatible">Custom OpenAI-Compatible</option></select></div>
-            <div class="input-group" id="apiKeyGroup" style="display:none"><div class="input-label">API Key</div><input class="input" id="llmApiKey" type="password" placeholder="sk-..."><div style="font-size:10px;color:var(--muted)">Stored locally only, never sent to our server except for move generation</div></div>
-            <div class="input-group"><div class="input-label">Model</div><select class="input" id="llmModel"><option value="gpt-4o-mini">gpt-4o-mini (Cheap & Fast)</option><option value="gpt-4o">gpt-4o</option><option value="claude-3-5-sonnet-20240620">claude-3.5-sonnet</option><option value="gemini-1.5-flash">gemini-1.5-flash</option><option value="llama-3.1-70b-versatile">llama-3.1-70b (Groq)</option></select></div>
-            <div class="input-group"><div class="input-label">Your Color vs LLM</div><select class="input" id="llmColor"><option value="w">You White vs LLM Black</option><option value="b">You Black vs LLM White</option></select></div>
-            <div style="display:flex;gap:8px;margin-top:10px">
-              <button class="btn btn-green" style="flex:1" onclick="startLLMGame(false)">💰 Bet vs LLM</button>
-              <button class="btn btn-outline" style="flex:1" onclick="startLLMGame(true)">Free vs LLM</button>
-            </div>
-            <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
-              <button class="btn btn-small btn-dark" onclick="startLLMvsLLM()">🤖🤖 LLM vs LLM</button>
-              <button class="btn btn-small btn-dark" onclick="startLLMvsStockfish()">🤖vs♞ LLM vs Stockfish</button>
-            </div>
-            <div style="background:rgba(46,204,113,.08);border:1px solid rgba(46,204,113,.2);border-radius:10px;padding:8px;margin-top:10px;font-size:11px;color:var(--muted)"><b>How LLM Arena works (Following your 5 steps):</b><br>1. We capture FEN after your move<br>2. Build system prompt with FEN + legal moves<br>3. Send to AI gateway (OpenAI/Groq etc)<br>4. LLM returns JSON: {"commentary":"...","move":"e2e4"}<br>5. We parse, show commentary, play move on board & check mate.</div>
+          <div class="bet-slider-container">
+            <div class="input-label" style="display:flex;justify-content:space-between">Stake <span style="color:var(--cyan);font-weight:800" id="quickBetLabel">$1.00</span></div>
+            <input type="range" id="quickBetSlider" min="0" max="20" step="0.5" value="1" class="bet-slider">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted)"><span>Free</span><span>$20</span></div>
           </div>
+          <button class="play-btn large" id="findMatchBtn" onclick="findMatch()" style="margin-top:14px">
+            <span class="play-icon">⚡</span>
+            <div><b>Find a match · $<span id="findBetAmount">1.00</span></b><span class="play-sub">Matched with a player staking the same amount</span></div>
+          </button>
+          <div class="search-status" id="searchStatus">
+            <div class="search-spinner"></div>
+            <div style="flex:1"><b id="searchText">Searching…</b><div style="font-size:11px;color:var(--muted)" id="searchSub"></div></div>
+            <button class="btn btn-small btn-outline" onclick="cancelSearch()">Cancel</button>
+          </div>
+          <p style="margin-top:14px;font-size:11px;color:var(--muted);line-height:1.6">
+            Winner takes 90% of the pot (10% platform fee). Drawn games refund both stakes. Rated games update your Elo.
+          </p>
         </div>
       </div>
     </div>
 
-    <!-- Wallet Mini -->
+    <!-- Wallet & stats -->
     <div class="card">
-      <div class="card-header"><span>💳 Wallet & Stats</span></div>
+      <div class="card-header"><span>💳 Wallet &amp; stats</span></div>
       <div class="card-body">
-        <div class="wallet-quick"><div class="wallet-stat"><div class="wallet-stat-label">Earned</div><div class="wallet-stat-value" id="totalWon">$0.00</div></div><div class="wallet-stat"><div class="wallet-stat-label">Puzzles</div><div class="wallet-stat-value" id="puzzlesSolved">0</div></div></div>
+        <div class="wallet-quick">
+          <div class="wallet-stat"><div class="wallet-stat-label">Rating</div><div class="wallet-stat-value" id="statRating">—</div></div>
+          <div class="wallet-stat"><div class="wallet-stat-label">Record</div><div class="wallet-stat-value" id="statRecord">0–0–0</div></div>
+          <div class="wallet-stat"><div class="wallet-stat-label">Won</div><div class="wallet-stat-value" id="totalWon" style="color:var(--green)">$0.00</div></div>
+          <div class="wallet-stat"><div class="wallet-stat-label">Puzzles</div><div class="wallet-stat-value" id="puzzlesSolved">0</div></div>
+        </div>
         <div class="tx-list" id="txListMini"></div>
       </div>
     </div>
   </aside>
 
-  <!-- CENTER - Board like chess.com / lichess.org -->
+  <!-- ===================== CENTER / BOARD ===================== -->
   <main class="center-area">
-    <!-- Opponent bar -->
-    <div class="player-bar" id="blackBar"><div class="player-info"><div class="player-avatar" id="blackAvatar">♚</div><div><div class="player-name" id="blackName">Choose a mode to start</div><div class="player-status" id="blackStatus">Waiting • Select bet to find match</div></div></div><div class="timer" id="blackTimer">10:00</div></div>
-
-    <!-- Board + Eval -->
-    <div class="board-area">
-      <div class="eval-container"><div class="eval-bar vertical"><div class="eval-fill-vert" id="verticalFill" style="height:50%"></div><span class="eval-number" id="evalNumber">0.0</span></div></div>
-      <div class="chess-board" id="board"></div>
-      <div style="width:18px"></div>
+    <div class="player-bar" id="blackBar">
+      <div class="player-info">
+        <div class="player-avatar" id="blackAvatar">♚</div>
+        <div>
+          <div class="player-name" id="blackName">Choose a mode to start<span class="player-rating" id="blackRating" style="display:none"></span></div>
+          <div class="player-status" id="blackStatus">Pick the engine, invite a friend, or quick-match</div>
+        </div>
+      </div>
+      <div class="timer" id="blackTimer">10:00</div>
     </div>
 
-    <div class="player-bar" id="whiteBar"><div class="player-info"><div class="player-avatar" id="whiteAvatar">Y</div><div><div class="player-name" id="whiteName">You</div><div class="player-status" id="whiteStatus">Your turn</div></div></div><div class="timer active" id="whiteTimer">10:00</div></div>
+    <div class="board-wrap">
+      <div class="eval-container"><div class="eval-bar vertical"><div class="eval-fill-vert" id="verticalFill" style="height:50%"></div><span class="eval-number" id="evalNumber">0.0</span></div></div>
+      <div class="board-frame">
+        <div class="chess-board" id="board" data-theme="classic"></div>
+      </div>
+    </div>
 
-    <!-- Board controls chess.com style -->
-    <div class="board-controls"><span class="status-badge" id="engineStatus" title="Analysis engine">Engine starting…</span><button class="control-btn" onclick="flipBoard()">🔄 Flip</button><button class="control-btn" onclick="getHint()">💡 Hint</button><button class="control-btn" onclick="undoMove()">↩️ Undo</button><button class="control-btn" onclick="resetBoard()">🔄 Reset</button><button class="control-btn" onclick="openAnalysis()">📊 Analysis</button></div>
+    <div class="player-bar" id="whiteBar">
+      <div class="player-info">
+        <div class="player-avatar" id="whiteAvatar">Y</div>
+        <div>
+          <div class="player-name" id="whiteName">You<span class="player-rating" id="myRating" style="display:none"></span></div>
+          <div class="player-status" id="whiteStatus">Ready</div>
+        </div>
+      </div>
+      <div class="timer active" id="whiteTimer">10:00</div>
+    </div>
 
-    <div class="engine-thinking" id="engineThinking" style="display:none"><div class="thinking-dots"><span></span><span></span><span></span></div><span id="thinkingText" style="font-size:13px">Stockfish thinking depth 14...</span><span class="chip" id="engineDepth" style="margin-left:auto">0.5s</span></div>
+    <div class="board-controls">
+      <span class="status-badge" id="engineStatus" title="Analysis engine">Engine starting…</span>
+      <button class="control-btn" onclick="flipBoard()">⇅ Flip</button>
+      <button class="control-btn" onclick="cycleBoardTheme()">🎨 Board</button>
+      <button class="control-btn" onclick="getHint()">💡 Hint</button>
+      <button class="control-btn" onclick="openAnalysis()">📊 Analysis</button>
+      <button class="control-btn" onclick="resignGame()">🏳️ Resign</button>
+      <button class="control-btn" onclick="offerDraw()">🤝 Draw</button>
+    </div>
+
+    <div class="engine-thinking" id="engineThinking">
+      <div class="thinking-dots"><span></span><span></span><span></span></div>
+      <span id="thinkingText" style="font-size:13px">Engine thinking…</span>
+      <span class="chip" id="engineDepth" style="margin-left:auto">depth —</span>
+    </div>
   </main>
 
-  <!-- RIGHT SIDEBAR - like chess.com -->
+  <!-- ===================== RIGHT SIDEBAR ===================== -->
   <aside class="right-sidebar">
-    <!-- Game / Moves / Chat tabs -->
     <div class="card" style="flex:1;display:flex;flex-direction:column">
-      <div class="right-tabs"><button class="right-tab active" data-rtab="game" onclick="switchRightTab('game')">Game</button><button class="right-tab" data-rtab="analysis" onclick="switchRightTab('analysis')">Analysis</button><button class="right-tab" data-rtab="chat" onclick="switchRightTab('chat')">Chat</button></div>
+      <div class="right-tabs">
+        <button class="right-tab active" data-rtab="game" onclick="switchRightTab('game')">Game</button>
+        <button class="right-tab" data-rtab="analysis" onclick="switchRightTab('analysis')">Analysis</button>
+        <button class="right-tab" data-rtab="chat" onclick="switchRightTab('chat')">Chat</button>
+      </div>
 
       <div class="right-tab-content active" id="rtab-game">
         <div class="card-body" style="flex:1;display:flex;flex-direction:column">
-          <div id="gameInfo"><div class="empty-state"><div class="empty-icon">♟️</div><b>Welcome to BetChess ZW!</b><br><br>1. Deposit via EcoCash<br>2. Set bet $0.50+<br>3. Click <b>Find Match</b> to pair with same bet (like chess.com but with money) OR bet vs Stockfish instantly<br>4. Winner auto-paid.<br><br><b>Structure inspired by chess.com / lichess.org but with ZW twist.</b></div></div>
+          <div id="gameInfo">
+            <div class="empty-state">
+              <div class="empty-icon">♟️</div>
+              <b style="color:var(--text)">Ready when you are.</b><br>
+              Play the rated Stockfish ladder, send a friend an invite link, or jump into a staked quick match.
+            </div>
+          </div>
 
-          <div style="margin-top:12px;flex:1"><div class="input-label">Moves • Like chess.com</div><div class="moves-panel chesscom-moves" id="movesPanel"></div></div>
+          <div style="margin-top:14px;flex:1;min-height:120px">
+            <div class="input-label">Moves</div>
+            <div class="moves-panel chesscom-moves" id="movesPanel"></div>
+          </div>
 
-          <div class="game-actions" style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn btn-outline" onclick="offerDraw()">🤝 Draw</button><button class="btn btn-outline" onclick="resignGame()">🏳️ Resign</button></div>
-
-          <div class="pot-card"><div class="input-label">Pot • Bet Pairing Logic</div><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:20px;font-weight:800;color:var(--green)" id="potDisplay">$0.00</div><div style="font-size:11px;color:var(--muted)" id="potSub">Deposit to play</div></div><div style="text-align:right"><div style="font-size:11px;color:var(--muted)">To Win</div><div style="font-weight:800;color:var(--green)" id="liveWin">$0.00</div><div style="font-size:10px;color:var(--muted)" id="liveMult">-</div></div></div></div>
+          <div class="pot-card">
+            <div class="input-label">Pot</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+              <div>
+                <div style="font-size:22px;font-weight:900;color:var(--green)" id="potDisplay">$0.00</div>
+                <div style="font-size:11px;color:var(--muted)" id="potSub">No active game</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:11px;color:var(--muted)">You win</div>
+                <div style="font-weight:900;color:var(--green);font-size:16px" id="liveWin">$0.00</div>
+                <div style="font-size:10px;color:var(--muted)" id="liveMult">—</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="right-tab-content" id="rtab-analysis">
         <div class="card-body">
-          <div class="input-label">Stockfish 16 • Evaluation</div>
-          <div style="background:var(--bg3);border-radius:10px;padding:10px;margin-top:8px"><div style="font-family:JetBrains Mono;font-size:13px" id="evalDisplay">+0.3 White is slightly better</div><div class="eval-bar horiz"><div class="eval-fill" id="evalFill" style="width:55%"></div></div></div>
+          <div class="input-label">Stockfish 18 · evaluation</div>
+          <div style="background:rgba(2,6,23,0.45);border:1px solid var(--hairline);border-radius:12px;padding:12px;margin-top:8px">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:13px" id="evalDisplay">+0.0 — equal position</div>
+            <div style="height:8px;border-radius:99px;background:#1a1f2b;margin-top:10px;overflow:hidden"><div id="evalFill" style="height:100%;width:50%;background:linear-gradient(90deg,#f8fafc,#cbd5e1);transition:width .6s"></div></div>
+          </div>
 
-          <div style="margin-top:14px"><div class="input-label">🤖 LLM Agent Commentary (Live)</div><div class="commentary-box" id="commentaryBox">LLM commentary will appear here during LLM Arena games. Configure your API key in left panel → LLM tab. If no key, we use Stockfish-simulated human-like reasoning.<br><br><b>Example:</b> <i>"I'm eyeing the weak f7 square, centralizing my knight could create threats. My candidate is Ng5."</i></div></div>
+          <div style="margin-top:16px"><div class="input-label">Principal variation</div><div class="analysis-lines" id="analysisLines">Engine analysis will appear here during play.</div></div>
 
-          <div style="margin-top:12px"><div class="input-label">Best Lines • Stockfish</div><div class="analysis-lines" id="analysisLines">Engine shows best continuation here.</div></div>
-
-          <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-small btn-outline" onclick="getHint()">💡 Hint</button><button class="btn btn-small btn-outline" onclick="showSolution()">🎯 Best Line</button><button class="btn btn-small btn-dark" onclick="toggleEngine()">⏯️ Engine</button></div>
+          <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-small btn-outline" onclick="getHint()">💡 Hint</button>
+            <button class="btn btn-small btn-outline" onclick="showSolution()">🎯 Best move</button>
+            <button class="btn btn-small btn-dark" onclick="toggleEngine()">⏯ Engine on/off</button>
+          </div>
         </div>
       </div>
 
       <div class="right-tab-content" id="rtab-chat">
-        <div class="card-body" style="display:flex;flex-direction:column;height:400px">
-          <div class="chat-messages" id="chatMessages"><div class="chat-msg system"><b>System:</b> Bet matchmaking chat - be respectful. No cheating!</div></div>
-          <div style="display:flex;gap:6px;margin-top:10px"><input class="input" id="chatInput" placeholder="Say gg or good game..." style="flex:1"><button class="btn btn-small btn-green" onclick="sendChat()">Send</button></div>
+        <div class="card-body" style="display:flex;flex-direction:column">
+          <div class="chat-messages" id="chatMessages"><div class="chat-msg system">Game chat — be respectful. Good luck!</div></div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <input class="input" id="chatInput" placeholder="Say good luck…" onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn btn-small btn-cyan" onclick="sendChat()">Send</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Leaderboard mini -->
-    <div class="card"><div class="card-header"><span>🏆 GM Slayers Leaderboard</span><button class="btn btn-small btn-dark" onclick="switchPage('leaderboard')">Full</button></div><div class="card-body"><div id="miniLeaderboard" class="leaderboard-list"></div></div></div>
+    <div class="card">
+      <div class="card-header"><span>🏆 Top players</span><button class="btn btn-small btn-dark" onclick="switchPage('leaderboard')">Full board</button></div>
+      <div class="card-body"><div id="miniLeaderboard" class="leaderboard-list"></div></div>
+    </div>
   </aside>
 </div>
 
-<!-- Pages overlay for Puzzles / Leaderboard / Learn -->
+<!-- ===================== PUZZLES PAGE ===================== -->
 <div class="page-overlay" id="page-puzzles" style="display:none">
-  <div class="page-content"><button class="btn btn-outline" onclick="switchPage('play')">← Back to Play</button><h2 style="margin:16px 0">🧩 Puzzles • Tactics Trainer (Stockfish)</h2><div style="display:grid;grid-template-columns:1fr 340px;gap:18px"><div><div class="chess-board" id="puzzleBoard" style="max-width:520px"></div><div style="margin-top:12px;display:flex;gap:8px"><button class="btn btn-outline" onclick="nextPuzzle()">Next Puzzle →</button><button class="btn btn-dark" onclick="getPuzzleHint()">💡 Hint</button></div><div id="puzzleInfo" style="margin-top:12px" class="card"><div class="card-body"><b id="puzzleTheme">Theme: Fork</b> • Rating <span id="puzzleRating">1200</span><div style="font-size:13px;color:var(--muted);margin-top:6px" id="puzzleDesc">Find the winning move</div><div style="margin-top:10px"><span class="chip">Win $0.10 per solve</span><span class="chip">Elo +3</span></div></div></div></div><div class="card"><div class="card-header">Puzzle Progress</div><div class="card-body"><div class="wallet-stat"><div class="wallet-stat-label">Solved</div><div class="wallet-stat-value" id="puzzlesSolvedPage">0</div></div><div style="margin-top:12px" class="tx-list" id="puzzleHistory"></div></div></div></div></div>
+  <div class="page-content">
+    <button class="btn btn-outline" onclick="switchPage('play')">← Back to play</button>
+    <h2>🧩 Tactics trainer</h2>
+    <div class="page-grid page-grid-puzzles">
+      <div>
+        <div class="board-frame" style="max-width:520px"><div class="chess-board" id="puzzleBoard" data-theme="classic" style="aspect-ratio:1"></div></div>
+        <div style="margin-top:14px;display:flex;gap:10px">
+          <button class="btn btn-cyan" onclick="nextPuzzle()">Next puzzle →</button>
+          <button class="btn btn-outline" onclick="getPuzzleHint()">💡 Hint</button>
+        </div>
+        <div class="card" style="margin-top:16px"><div class="card-body">
+          <b id="puzzleTheme">Theme</b> · Rating <span id="puzzleRating">1200</span>
+          <div style="font-size:13px;color:var(--muted);margin-top:6px" id="puzzleDesc">Find the best move</div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><span class="chip">Puzzle rating: <span id="puzzleRatingStat">1200</span></span><span class="chip">Solved: <span id="puzzleSolvedCount">0</span></span></div>
+        </div></div>
+      </div>
+      <div class="card"><div class="card-header">Progress</div><div class="card-body">
+        <div class="wallet-stat"><div class="wallet-stat-label">Solved</div><div class="wallet-stat-value" id="puzzlesSolvedPage">0</div></div>
+        <div style="margin-top:14px" class="tx-list" id="puzzleHistory"></div>
+      </div></div>
+    </div>
+  </div>
 </div>
 
+<!-- ===================== LEADERBOARD PAGE ===================== -->
 <div class="page-overlay" id="page-leaderboard" style="display:none">
-  <div class="page-content"><button class="btn btn-outline" onclick="switchPage('play')">← Back</button><h2 style="margin:16px 0">🏆 Leaderboard • Who Beat Grandmaster?</h2><div style="display:grid;grid-template-columns:1fr 340px;gap:18px"><div class="card"><div class="card-header">💰 Top Earners vs Stockfish</div><div class="card-body"><div id="fullLeaderboard"></div></div></div><div><div class="card"><div class="card-header">🎰 Jackpot Pool</div><div class="card-body" style="text-align:center"><div style="font-size:42px;font-weight:800;color:var(--yellow)" id="jackpotFull">$1,250.75</div><div style="font-size:13px;color:var(--muted)">Grows 2% from every loss vs Master/GM</div><div style="background:var(--bg3);border-radius:10px;padding:12px;margin-top:12px;text-align:left;font-size:12px;line-height:1.5"><b>How to win Jackpot:</b><br>• Beat Master (10% chance to win 10% of pool)<br>• Beat Grandmaster (15% chance + $10 bonus)<br>• Pool resets weekly, otherwise keeps growing like progressive slot.</div><button class="btn btn-green" style="width:100%;margin-top:12px" onclick="switchPage('play'); switchLeftTab('stockfish')">Try Beat GM for Jackpot</button></div></div><div class="card" style="margin-top:16px"><div class="card-header">🏆 Grandmaster Slayers</div><div class="card-body"><div id="gmSlayers"></div></div></div></div></div></div>
+  <div class="page-content">
+    <button class="btn btn-outline" onclick="switchPage('play')">← Back</button>
+    <h2>🏆 Leaderboard</h2>
+    <div class="page-grid page-grid-lb">
+      <div class="card"><div class="card-header">📈 Highest rated</div><div class="card-body"><div id="fullLeaderboard"></div></div></div>
+      <div>
+        <div class="card"><div class="card-header">🎰 Jackpot pool</div><div class="card-body" style="text-align:center">
+          <div style="font-size:42px;font-weight:900;color:var(--amber)" id="jackpotFull">—</div>
+          <div style="font-size:13px;color:var(--muted)">Funded by 2% of stakes lost vs Master &amp; Grandmaster</div>
+          <div style="background:rgba(2,6,23,0.45);border:1px solid var(--hairline);border-radius:12px;padding:14px;margin-top:14px;text-align:left;font-size:12px;line-height:1.7">
+            Beat <b>Master</b> or <b>Grandmaster</b> for a chance at 10% of the pool, plus a $10 bonus for a GM win. The pool keeps growing until won.
+          </div>
+          <button class="btn btn-cyan" style="width:100%;margin-top:14px" onclick="switchPage('play');switchLeftTab('engine')">Take on the Grandmaster</button>
+        </div></div>
+        <div class="card" style="margin-top:16px"><div class="card-header">🏆 Grandmaster slayers</div><div class="card-body"><div id="gmSlayers"></div></div></div>
+      </div>
+    </div>
+  </div>
 </div>
 
-<div class="page-overlay" id="page-llm" style="display:none">
-  <div class="page-content"><button class="btn btn-outline" onclick="switchPage('play')">← Back</button><h2>🤖 LLM Arena — Open Source Agent Platform</h2><p style="color:var(--muted);margin:8px 0 16px">Build your own chess LLM agent without writing code — just provide API key + prompt. Follows your 5-step LLM setup plan.</p><div style="display:grid;grid-template-columns:1fr 380px;gap:20px"><div class="card"><div class="card-header">Step-by-step (as you requested)</div><div class="card-body" style="font-size:13px;line-height:1.6"><b>Step 1: Project Structure</b><br>Frontend: chessboard.js UI lib + chess.js logic utility (already done)<br><br><b>Step 2: UI & Layout</b><br>Dashboard centered, config panel for API credentials + model dropdown, commentary display (right sidebar → Analysis tab)<br><br><b>Step 3: Game Loop & State</b><br>Initialize board, validate drag-drop via chess.js, async delay → hand over to AI pipeline<br><br><b>Step 4: LLM API Integration</b><br>FEN extracted, system prompt built with FEN + legal moves, HTTP to aggregator (OpenAI/Groq/Anthropic/Gemini)<br><br><b>Step 5: Parse & Execute</b><br>Extract commentary → display, extract UCI move → chess.js validation → update board, check mate/draw.<br><br><div style="background:var(--bg3);padding:10px;border-radius:10px;font-family:JetBrains Mono;font-size:11px">System Prompt Used:<br>"You are Grandmaster... FEN: {fen}... Legal: {moves}... Output JSON {commentary, move}"</div></div></div><div class="card"><div class="card-header">Live Commentary Stream</div><div class="card-body"><div class="commentary-box" id="llmPageCommentary" style="height:300px">Waiting for LLM game...</div><div style="margin-top:12px"><button class="btn btn-outline" style="width:100%" onclick="switchPage('play')">Go Play vs LLM</button></div></div></div></div></div>
-</div>
+<!-- ===================== MODALS ===================== -->
+<div class="modal-backdrop" id="otpModal"><div class="modal">
+  <div class="modal-header"><div class="modal-title">📱 Verify your phone</div><div class="modal-sub">Link your wallet to your EcoCash number — secure and recoverable</div></div>
+  <div class="modal-body">
+    <div class="input-group"><div class="input-label">Mobile number (07…)</div><input class="input" id="otpPhone" placeholder="0771234567" value="07"></div>
+    <div id="otpRequestSection">
+      <button class="btn btn-cyan" style="width:100%;padding:12px" id="requestOtpBtn" onclick="requestOTP()">📲 Send verification code</button>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;text-align:center">A one-time code is sent by SMS. In sandbox mode the code is shown on screen for testing.</div>
+    </div>
+    <div id="otpVerifySection" style="display:none">
+      <div class="input-group"><div class="input-label">Enter the 6-digit code</div><input class="input" id="otpCode" placeholder="123456" maxlength="6" style="font-size:20px;letter-spacing:10px;text-align:center"></div>
+      <button class="btn btn-cyan" style="width:100%;padding:12px" onclick="verifyOTP()">✅ Verify</button>
+      <div style="font-size:11px;color:var(--amber);margin-top:8px;text-align:center" id="otpDemoCode"></div>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('otpModal')">Continue as guest</button></div>
+</div></div>
 
-<!-- Modals (deposit/withdraw/profile + NEW OTP + Spectator) -->
-<div class="modal-backdrop" id="otpModal"><div class="modal"><div class="modal-header"><div class="modal-title">📱 EcoCash Phone Login - OTP</div><div class="modal-sub">Wallet tied to phone - Secure, recoverable, ZW compliant</div></div><div class="modal-body"><div class="input-group"><div class="input-label">EcoCash Number (077...)</div><input class="input" id="otpPhone" placeholder="0771234567" value="077"></div><div id="otpRequestSection"><button class="btn btn-green" style="width:100%;justify-content:center" id="requestOtpBtn" onclick="requestOTP()">📲 Send OTP via SMS</button><div style="font-size:11px;color:var(--muted);margin-top:6px">In production, SMS via Econet API. Demo: OTP shown in server console + returned for testing.</div></div><div id="otpVerifySection" style="display:none"><div class="input-group"><div class="input-label">Enter 6-digit OTP</div><input class="input" id="otpCode" placeholder="123456" maxlength="6" style="font-size:18px;letter-spacing:8px;text-align:center"></div><button class="btn btn-green" style="width:100%" onclick="verifyOTP()">✅ Verify & Login</button><div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center" id="otpDemoCode">Demo code will appear here</div></div></div><div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('otpModal')">Skip (Guest)</button></div></div></div>
+<div class="modal-backdrop" id="depositModal"><div class="modal">
+  <div class="modal-header"><div class="modal-title">Deposit</div><div class="modal-sub">EcoCash · InnBucks · OneMoney · Bank · Agent</div></div>
+  <div class="modal-body">
+    <div class="ecocash-branding"><span style="background:#fff;color:#0e7490;width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:900">$</span> Mobile money · Zimbabwe <span id="ecoModeBadge" style="background:rgba(255,255,255,.15);padding:2px 8px;border-radius:99px;font-size:10px;margin-left:auto">SANDBOX</span></div>
+    <div class="input-group"><div class="input-label">Pay with</div><div class="method-grid" id="depositProviders"></div></div>
+    <div class="input-group" id="depositPhoneGroup"><div class="input-label">Wallet number</div><input class="input" id="ecoPhone" value="07"></div>
+    <div id="depositStatus" style="display:none;background:rgba(2,6,23,0.5);border:1px solid var(--hairline);border-radius:10px;padding:12px;font-size:11px;line-height:1.6"></div>
+    <div class="input-group"><div class="input-label">Amount (USD)</div><input class="input" id="depositAmount" type="number" value="5.00" min="0.5" step="0.5">
+      <div style="display:flex;gap:6px;margin-top:8px"><button class="btn btn-small btn-dark" onclick="setDeposit(1)">$1</button><button class="btn btn-small btn-dark" onclick="setDeposit(5)">$5</button><button class="btn btn-small btn-dark" onclick="setDeposit(10)">$10</button><button class="btn btn-small btn-dark" onclick="setDeposit(20)">$20</button></div>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('depositModal')">Cancel</button><button class="btn btn-green" style="flex:1" id="depositBtn" onclick="doDeposit()">Deposit</button></div>
+</div></div>
 
-<div class="modal-backdrop" id="depositModal"><div class="modal"><div class="modal-header"><div class="modal-title">Deposit</div><div class="modal-sub">EcoCash • InnBucks • OneMoney • Bank • Agent</div></div><div class="modal-body"><div class="ecocash-branding"><span style="background:#fff;color:#0a58ca;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center">E</span> EcoCash • Zimbabwe • <span id="ecoModeBadge" style="background:rgba(255,255,255,.2);padding:2px 6px;border-radius:10px;font-size:10px">SANDBOX</span></div><div class="input-group"><div class="input-label">Pay with</div><div class="method-grid" id="depositProviders"></div></div><div class="input-group" id="depositPhoneGroup"><div class="input-label">Wallet number</div><input class="input" id="ecoPhone" value="077"></div><div id="depositStatus" style="display:none;background:var(--bg3);border-radius:8px;padding:10px;font-size:11px;line-height:1.5;margin-bottom:4px"></div><div class="input-group"><div class="input-label">Amount USD</div><input class="input" id="depositAmount" type="number" value="5.00" min="0.5" step="0.5"><div style="display:flex;gap:6px;margin-top:6px"><button class="btn btn-small btn-dark" onclick="setDeposit(1)">$1</button><button class="btn btn-small btn-dark" onclick="setDeposit(5)">$5</button><button class="btn btn-small btn-dark" onclick="setDeposit(10)">$10</button><button class="btn btn-small btn-dark" onclick="setDeposit(20)">$20</button></div></div><div style="background:var(--bg3);border-radius:8px;padding:8px;font-size:11px;line-height:1.4"><b>How it works:</b> POST /api/payments/deposit → C2B prompt on your handset → callback /api/payments/webhook/&lt;provider&gt; credits the wallet. Sandbox mode (no merchant keys) settles automatically so the whole flow is testable; set PAYMENT_MODE=live plus the ECOCASH_* keys to go live.</div></div><div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('depositModal')">Cancel</button><button class="btn btn-green" style="flex:1" id="depositBtn" onclick="doDeposit()">Deposit</button></div></div></div>
+<div class="modal-backdrop" id="withdrawModal"><div class="modal">
+  <div class="modal-header"><div class="modal-title">Withdraw</div><div class="modal-sub">Mobile money or bank · minimum $1</div></div>
+  <div class="modal-body">
+    <div class="method-grid" id="withdrawProviders"></div>
+    <div id="ecoWithdrawForm" style="margin-top:10px"><input class="input" id="withdrawPhone" placeholder="Mobile money number"></div>
+    <div id="bankWithdrawForm" style="display:none;margin-top:10px">
+      <select class="input" id="bankName"><option>CBZ</option><option>Steward Bank</option><option>CABS</option><option>Stanbic</option><option>FBC</option></select>
+      <input class="input" id="bankAccount" placeholder="Account number" style="margin-top:8px">
+    </div>
+    <div class="input-group" style="margin-top:10px"><div class="input-label">Amount (available: <span id="availableBalance">$0</span>)</div><input class="input" id="withdrawAmount" type="number"></div>
+    <div style="font-size:11px;color:var(--muted);line-height:1.6">Withdrawals are reviewed and paid out on confirmation. Sandbox mode settles automatically for testing.</div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('withdrawModal')">Cancel</button><button class="btn btn-green" style="flex:1" onclick="doWithdraw()">Withdraw</button></div>
+</div></div>
 
-<div class="modal-backdrop" id="withdrawModal"><div class="modal"><div class="modal-header"><div class="modal-title">Withdraw</div><div class="modal-sub">EcoCash or Bank • Min $1 • Admin approval in LIVE mode</div></div><div class="modal-body"><div class="method-grid" id="withdrawProviders"></div><div id="ecoWithdrawForm"><input class="input" id="withdrawPhone" placeholder="EcoCash number"></div><div id="bankWithdrawForm" style="display:none"><select class="input" id="bankName"><option>CBZ</option><option>Steward Bank</option><option>CABS</option><option>Stanbic</option><option>FBC</option></select><input class="input" id="bankAccount" placeholder="Account" style="margin-top:8px"></div><div class="input-group" style="margin-top:8px"><div class="input-label">Amount (Avail: <span id="availableBalance">$0</span>)</div><input class="input" id="withdrawAmount" type="number"></div><div style="font-size:11px;color:var(--muted)">In LIVE mode, withdrawals go to Pending → Admin approves at /admin → triggers EcoCash B2C. Mock mode auto-approves in 3s.</div></div><div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('withdrawModal')">Cancel</button><button class="btn btn-green" style="flex:1" onclick="doWithdraw()">Withdraw</button></div></div></div>
+<div class="modal-backdrop" id="profileModal"><div class="modal">
+  <div class="modal-header"><div class="modal-title">Profile</div><div class="modal-sub">Your account, rating and wallet recovery</div></div>
+  <div class="modal-body">
+    <div class="input-group"><div class="input-label">Username</div><input class="input" id="usernameInput"></div>
+    <div class="input-group"><div class="input-label">Rating</div><input class="input" id="profileRating" readonly style="opacity:.8"></div>
+    <div class="input-group"><div class="input-label">Wallet ID</div><input class="input" id="userIdDisplay" readonly style="opacity:.6;font-size:11px"></div>
+    <div class="input-group"><div class="input-label">Verified phone</div><input class="input" id="profilePhone" readonly placeholder="Not verified">
+      <button class="btn btn-small btn-outline" style="margin-top:8px" onclick="closeModal('profileModal');openModal('otpModal')">📱 Verify phone</button>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('profileModal')">Close</button><button class="btn btn-cyan" style="flex:1" onclick="saveProfile()">Save</button></div>
+</div></div>
 
-<div class="modal-backdrop" id="profileModal"><div class="modal"><div class="modal-header"><div class="modal-title">Profile & Wallet Recovery</div><div class="modal-sub">Wallet now tied to phone via OTP - recoverable</div></div><div class="modal-body"><div class="input-group"><div class="input-label">Username</div><input class="input" id="usernameInput"></div><div class="input-group"><div class="input-label">Wallet ID (internal)</div><input class="input" id="userIdDisplay" readonly style="opacity:.7"></div><div class="input-group"><div class="input-label">EcoCash Phone (verified)</div><input class="input" id="profilePhone" readonly placeholder="Verify via OTP"><button class="btn btn-small btn-outline" style="margin-top:6px" onclick="openModal('otpModal')">📱 Verify Phone via OTP</button></div><div style="font-size:11px;color:var(--muted)">DB Persistence: balances saved to data/users.json every 3 sec, survives restart. Phone OTP links wallet to EcoCash number.</div></div><div class="modal-footer"><button class="btn btn-outline" style="flex:1" onclick="closeModal('profileModal')">Close</button><button class="btn btn-green" style="flex:1" onclick="saveProfile()">Save Username</button></div></div></div>
-
-<div class="modal-backdrop" id="shareModal"><div class="modal"><div class="modal-header"><div class="modal-title">🔗 Share Game - Spectator Mode</div><div class="modal-sub">Anyone with link can watch live - like lichess.org</div></div><div class="modal-body"><div class="input-group"><div class="input-label">Spectator Link</div><input class="input" id="shareLink" readonly></div><div style="display:flex;gap:8px"><button class="btn btn-green" style="flex:1" onclick="copyShareLink()">📋 Copy Link</button><button class="btn btn-outline" style="flex:1" onclick="closeModal('shareModal')">Close</button></div><div style="background:var(--bg3);border-radius:8px;padding:10px;margin-top:10px;font-size:11px"><b>How spectators work:</b> Link format <code>?game=PVP-XXXX</code> . Spectators join room, see moves live, can chat but not move. Clock ticks visible. Used for high-stakes $20 games FOMO like chess.com broadcast.</div></div></div></div>
+<div class="modal-backdrop" id="shareModal"><div class="modal">
+  <div class="modal-header"><div class="modal-title">🔗 Invite link</div><div class="modal-sub" id="shareModalSub">Send this to a friend — they join your game instantly</div></div>
+  <div class="modal-body">
+    <div class="input-group"><div class="input-label">Link</div><input class="input" id="shareLink" readonly style="font-family:'JetBrains Mono',monospace;font-size:11px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cyan" style="flex:1" onclick="copyShareLink()">📋 Copy link</button>
+      <button class="btn btn-outline" style="flex:1" onclick="closeModal('shareModal')">Close</button>
+    </div>
+    <p style="font-size:11px;color:var(--muted);line-height:1.6" id="shareHint">Your friend opens the link, signs in, and lands straight in the game as your opponent. Spectators can also open the link to watch live.</p>
+  </div>
+</div></div>
 
 <div class="toast-container" id="toastContainer"></div>
+
 <script src="/js/engine-client.js" defer></script>
 <script src="app.js" defer></script>
 </body>

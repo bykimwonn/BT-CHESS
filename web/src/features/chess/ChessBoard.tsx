@@ -1,18 +1,28 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { Chess, type Square } from 'chess.js';
-import { Chessboard, defaultPieces, type Arrow, type PieceRenderObject, type PieceDropHandlerArgs, type SquareHandlerArgs } from 'react-chessboard';
-import { usePreferences } from '../../app/ThemeProvider';
+import {
+  Chessboard, defaultArrowOptions, defaultPieces,
+  type Arrow, type PieceRenderObject, type PieceDropHandlerArgs, type SquareHandlerArgs,
+} from 'react-chessboard';
+import { PIECE_THEMES, usePreferences, type BoardTheme } from '../../app/ThemeProvider';
 import { Icon } from '../../components/Icon';
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['1', '2', '3', '4', '5', '6', '7', '8'];
 const PIECE_KEYS = ['wP', 'wN', 'wB', 'wR', 'wQ', 'wK', 'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'];
 
-const BOARD_COLORS = {
-  forest: { light: '#e8dcc2', dark: '#7a9b8e' },
-  slate: { light: '#d7dee7', dark: '#536a91' },
-  walnut: { light: '#f0dfbd', dark: '#a97852' },
+/** Square palettes matching the familiar chess.com boards. */
+const BOARD_COLORS: Record<BoardTheme, { light: string; dark: string }> = {
+  green: { light: '#ebecd0', dark: '#739552' },
+  brown: { light: '#f0d9b5', dark: '#b58863' },
+  blue: { light: '#dee3e6', dark: '#8ca2ad' },
 };
+
+const HIGHLIGHT = 'rgba(255, 240, 120, .62)';
+const SELECTED = 'rgba(255, 240, 120, .82)';
+const MOVE_DOT = 'radial-gradient(circle, rgba(20, 60, 30, .33) 0 17%, transparent 19%)';
+const CAPTURE_RING = 'radial-gradient(circle, transparent 0 61%, rgba(20, 60, 30, .3) 63% 73%, transparent 75%)';
 
 function pieceName(piece: string | undefined, square: string): string {
   if (!piece) return square;
@@ -72,27 +82,31 @@ export function ChessBoard({
   const squareStyles = useMemo(() => {
     const styles: Record<string, CSSProperties> = {};
     if (lastMove) {
-      const highlight = { backgroundColor: 'rgba(216, 180, 106, .38)' };
-      styles[lastMove.from] = highlight;
-      styles[lastMove.to] = highlight;
+      styles[lastMove.from] = { backgroundColor: HIGHLIGHT };
+      styles[lastMove.to] = { backgroundColor: HIGHLIGHT };
     }
-    if (selected) styles[selected] = { ...(styles[selected] ?? {}), backgroundColor: 'rgba(216, 180, 106, .58)' };
     if (prefs.showLegalMoves && selected) {
       for (const move of allowed) {
         if (move.startsWith(selected) && move.length >= 4) {
           const target = move.slice(2, 4);
+          // A ring marks a capture, a dot marks a quiet move - the convention
+          // every chess.com and Lichess player already knows.
           styles[target] = {
             ...(styles[target] ?? {}),
-            background: chess.get(target as Square)
-              ? 'radial-gradient(circle, rgba(20,80,60,.62) 16%, transparent 18%)'
-              : 'radial-gradient(circle, rgba(20,80,60,.42) 14%, transparent 16%)',
+            background: chess.get(target as Square) ? CAPTURE_RING : MOVE_DOT,
           };
         }
       }
     }
+    if (selected) styles[selected] = { ...(styles[selected] ?? {}), backgroundColor: SELECTED };
     if (chess.isCheck()) {
       const king = chess.board().flat().find((p) => p?.type === 'k' && p.color === chess.turn());
-      if (king) styles[king.square] = { ...(styles[king.square] ?? {}), backgroundColor: 'rgba(255, 90, 90, .58)' };
+      if (king) {
+        styles[king.square] = {
+          ...(styles[king.square] ?? {}),
+          background: 'radial-gradient(circle, rgba(255, 70, 70, .95) 0 17%, rgba(255, 40, 40, .55) 28%, transparent 74%)',
+        };
+      }
     }
     return styles;
   }, [lastMove, selected, allowed, chess, prefs.showLegalMoves]);
@@ -140,13 +154,22 @@ export function ChessBoard({
     position: fen,
     boardOrientation,
     pieces,
-    boardStyle: { borderRadius: '8px', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.25)' },
+    boardStyle: { borderRadius: '4px', boxShadow: '0 18px 40px rgba(0,0,0,.28)', overflow: 'hidden' },
     darkSquareStyle: { backgroundColor: colors.dark },
     lightSquareStyle: { backgroundColor: colors.light },
+    dropSquareStyle: { boxShadow: 'inset 0 0 0 5px rgba(255,255,255,.72)' },
     squareStyles,
     showNotation: prefs.showCoordinates,
-    darkSquareNotationStyle: { color: 'rgba(255,255,255,.75)', fontSize: '11px', fontWeight: 700 },
-    lightSquareNotationStyle: { color: 'rgba(20,32,51,.7)', fontSize: '11px', fontWeight: 700 },
+    darkSquareNotationStyle: { color: colors.light, fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
+    lightSquareNotationStyle: { color: colors.dark, fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
+    arrowOptions: {
+      ...defaultArrowOptions,
+      colors: { ...defaultArrowOptions.colors, default: '#f2b134', shift: '#7fd1c1', ctrl: '#e8834a', alt: '#9b8cf0', meta: '#7fd1c1' },
+      color: '#f2b134',
+      arrowWidthDenominator: 11,
+      arrowLengthReducerDenominator: 9,
+      opacity: 0.86,
+    },
     showAnimations: prefs.animations && !prefs.reducedMotion,
     animationDurationInMs: prefs.reducedMotion ? 0 : 180,
     allowDragging: !disabled && !keyboardMode && !!onMove,
@@ -223,9 +246,12 @@ export function ChessBoard({
               <div className="promotion-options">
                 {(['q', 'r', 'b', 'n'] as const).map((piece, index) => (
                   <button key={piece} ref={index === 0 ? promotionRef : undefined}
-                    className="promotion-option" onClick={() => finishPromotion(piece)}
+                    className={`promotion-option ${index % 2 === 0 ? 'light' : 'dark'}`}
+                    onClick={() => finishPromotion(piece)}
                     aria-label={`Promote to ${({ q: 'queen', r: 'rook', b: 'bishop', n: 'knight' })[piece]}`}>
-                    <img className="piece-image classic" src={`/pieces/${turn === 'w' ? 'w' : 'b'}${piece.toUpperCase()}.svg`} alt="" />
+                    {prefs.pieceTheme === 'staunton'
+                      ? <span className="promotion-vector" aria-hidden="true">{({ q: '♕', r: '♖', b: '♗', n: '♘' })[piece]}</span>
+                      : <img className={`piece-image ${prefs.pieceTheme}`} src={`/pieces/${turn === 'w' ? 'w' : 'b'}${piece.toUpperCase()}.svg`} alt="" draggable={false} />}
                   </button>
                 ))}
               </div>
@@ -282,8 +308,8 @@ export function ChessBoard({
       )}
 
       <div className="board-caption">
-        <span>{prefs.showCoordinates ? 'Coordinates visible' : 'Coordinates hidden'} · {prefs.pieceTheme} pieces</span>
-        <span>Stockfish 19 GPL engine available in Analysis</span>
+        <span>{prefs.showCoordinates ? 'Coordinates visible' : 'Coordinates hidden'} · {(PIECE_THEMES.find((theme) => theme.id === prefs.pieceTheme) ?? PIECE_THEMES[0]).label} pieces</span>
+        <span><Link to="/train">Practice against Stockfish</Link> · <Link to="/analysis">analysis board</Link></span>
       </div>
     </div>
   );

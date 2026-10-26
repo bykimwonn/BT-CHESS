@@ -303,13 +303,21 @@ p { margin: 0 0 1rem; }
 /* ------------------------------------------------------------- board */
 .board-stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 1.5rem; align-items: start; }
 .board-column { min-width: 0; }
-.board-shell { width: min(100%, 720px); margin-inline: auto; position: relative; }
-.board-frame { border: 1px solid var(--border); border-radius: var(--radius); padding: .55rem; background: var(--surface); box-shadow: var(--shadow); }
-.board-container { width: 100%; aspect-ratio: 1 / 1; overflow: hidden; border-radius: 8px; }
+.board-shell { width: min(100%, 680px); margin-inline: auto; position: relative; }
+.board-frame {
+  padding: 0; border: 0; background: transparent; box-shadow: none;
+  border-radius: 6px;
+}
+.board-container { width: 100%; aspect-ratio: 1 / 1; overflow: hidden; border-radius: 6px; box-shadow: 0 20px 44px rgba(0,0,0,.34); }
 .board-container > div { width: 100% !important; height: 100% !important; }
 .piece-image { width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; }
-.piece-image.classic { filter: drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
-.piece-image.meridian { filter: drop-shadow(0 2px 2px rgba(0,0,0,.32)) saturate(.92); }
+/* The vendored Burnett set already carries its own outline; a soft shadow is
+   enough to lift the piece off the square the way a physical set does. */
+.piece-image.chesscom { filter: drop-shadow(0 1.5px 1.2px rgba(0,0,0,.42)); }
+/* High-contrast variant for low-vision users: stronger separation from the
+   board without changing the silhouette. */
+.piece-image.meridian { filter: drop-shadow(0 1.5px 1.5px rgba(0,0,0,.5)) contrast(1.18) saturate(.72); }
+.piece-image.classic { filter: drop-shadow(0 1.5px 1.2px rgba(0,0,0,.42)); }
 .board-actions { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: .75rem; }
 .board-keyboard {
   display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; padding: .5rem;
@@ -326,13 +334,71 @@ p { margin: 0 0 1rem; }
 .key-square.legal::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: rgba(20, 80, 60, .5); }
 .promotion-overlay {
   position: absolute; inset: 0; z-index: 10; display: grid; place-items: center;
-  background: rgba(4, 9, 18, .55); border-radius: 8px;
+  background: rgba(6, 10, 14, .48); border-radius: 6px; backdrop-filter: blur(1.5px);
 }
-.promotion-dialog { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 1rem; box-shadow: var(--shadow); text-align: center; }
-.promotion-options { display: flex; gap: .5rem; margin-top: .75rem; }
-.promotion-option { width: 64px; height: 64px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 6px; }
-.promotion-option:hover { border-color: var(--accent); }
+.promotion-dialog {
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px;
+  padding: .85rem 1rem 1rem; box-shadow: 0 24px 60px rgba(0,0,0,.45); text-align: center;
+}
+.promotion-dialog strong { font-size: .95rem; letter-spacing: .01em; }
+.promotion-options { display: flex; gap: 0; margin-top: .7rem; border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.promotion-option { width: 62px; height: 62px; border: 0; padding: 5px; display: grid; place-items: center; border-radius: 0; }
+.promotion-option.light { background: #ebecd0; }
+.promotion-option.dark { background: #739552; }
+.promotion-option:hover, .promotion-option:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.promotion-vector { font-size: 2.4rem; line-height: 1; color: #1b1b1b; }
+.promotion-option.dark .promotion-vector { color: #f2f2f2; }
 .board-caption { display: flex; justify-content: space-between; gap: 1rem; color: var(--text-muted); font-size: .78rem; margin-top: .5rem; flex-wrap: wrap; }
+
+/* ------------------------------------------------------- practice vs engine */
+.train-player {
+  display: flex; align-items: center; gap: .5rem; padding: .45rem .2rem;
+  font-size: .88rem; font-weight: 700; color: var(--text-soft);
+}
+.train-player:first-child { padding-bottom: .3rem; }
+.turn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex: 0 0 auto; }
+.turn-dot.live { background: var(--teal); box-shadow: 0 0 0 3px rgba(127, 209, 193, .22); }
+
+.level-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .4rem; }
+.level-option {
+  display: flex; flex-direction: column; align-items: center; gap: .1rem;
+  padding: .5rem .25rem; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); color: var(--text-soft); cursor: pointer; min-width: 0;
+}
+.level-option:hover { border-color: var(--border-strong); color: var(--text); }
+.level-option[aria-pressed='true'] {
+  border-color: var(--accent); color: var(--text);
+  background: linear-gradient(180deg, rgba(216, 180, 106, .16), rgba(216, 180, 106, .04));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.level-number { font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; line-height: 1; }
+.level-name { font-size: .64rem; font-weight: 700; text-align: center; line-height: 1.15; }
+.level-rating { font-family: var(--font-mono); font-size: .62rem; color: var(--text-muted); }
+
+.eval-bar {
+  position: relative; height: 20px; border-radius: 999px; overflow: hidden;
+  background: #2b2b2b; border: 1px solid var(--border-strong); margin: .35rem 0 .4rem;
+}
+.eval-fill { height: 100%; background: linear-gradient(90deg, #f4f4f4, #ffffff); transition: width .3s ease; }
+.eval-number {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font-family: var(--font-mono); font-size: .7rem; font-weight: 800;
+  color: #fff; background: rgba(8, 12, 16, .78); padding: .02rem .45rem;
+  border-radius: 999px; letter-spacing: .01em;
+}
+
+.train-moves { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 260px; overflow-y: auto; }
+.train-moves li {
+  display: grid; grid-template-columns: 2.1rem 1fr auto; align-items: center; gap: .4rem;
+  padding: .18rem .35rem; border-radius: 6px;
+}
+.train-moves li:nth-child(odd) { background: var(--surface-2); }
+.train-moves li.mine { box-shadow: inset 2px 0 0 var(--accent); }
+
+@media (max-width: 520px) {
+  .level-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .promotion-options { flex-direction: column; }
+}
 
 .player-strip { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .player-strip + .player-strip { margin-bottom: .5rem; }
@@ -445,7 +511,8 @@ p { margin: 0 0 1rem; }
   .card { padding: 1rem; }
   .section { padding: 2rem 0; }
   .section-head { flex-direction: column; align-items: flex-start; }
-  .board-frame { padding: .3rem; }
+  .board-container { border-radius: 4px; box-shadow: 0 12px 28px rgba(0,0,0,.3); }
+  .promotion-option { width: 54px; height: 54px; }
   .clock { font-size: 1.15rem; min-width: 78px; }
   .player-strip { padding: .55rem; }
   .avatar { width: 30px; height: 30px; }

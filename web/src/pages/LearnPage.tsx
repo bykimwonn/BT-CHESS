@@ -123,7 +123,7 @@ export function LearnPage() {
           <section className="card">
             <h2 className="card-title">Study method</h2>
             <ol className="small soft" style={{ paddingLeft: '1.2rem' }}>
-              <li>Read the objective.</li><li>Reproduce the idea on the board.</li><li>Answer the knowledge check.</li><li>Apply the pattern in Puzzles and review your games in Analysis.</li>
+              <li>Read the objective.</li><li>Reproduce the idea on the board.</li><li>Answer the knowledge check.</li><li>Apply the pattern in Puzzles and in a Practice game, then review in Analysis.</li>
             </ol>
             <p className="tiny muted" style={{ marginBottom: 0 }}>No external content, advertisements or fake activity feeds are embedded.</p>
           </section>

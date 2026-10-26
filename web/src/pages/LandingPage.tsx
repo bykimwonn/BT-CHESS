@@ -13,9 +13,9 @@ const DEMO_FEN = 'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq 
 
 const FEATURES = [
   { icon: 'shield', title: 'Server-authoritative play', text: 'Chess rules, clocks, ratings, results and money live in PostgreSQL. The browser never decides a game.' },
-  { icon: 'spark', title: 'Genuine Stockfish 19', text: 'A real GPL-licensed UCI WASM engine powers analysis. No invented evaluations or hardcoded best moves.' },
+  { icon: 'spark', title: 'Genuine Stockfish 19', text: 'A real GPL-licensed UCI WASM engine powers analysis and practice. No invented evaluations or hardcoded best moves.' },
   { icon: 'trophy', title: 'Compliance-gated competitions', text: 'Double-entry USD-cent ledger, atomic reservations and exactly-once settlement. Real money stays off until approved.' },
-  { icon: 'puzzle', title: 'Training that is real', text: 'Original composed puzzles, verified solutions, persisted ratings and move-quality summaries from actual games.' },
+  { icon: 'puzzle', title: 'Training that is real', text: 'Original puzzles, a Stockfish sparring partner at eight strengths, and move-quality summaries from actual games.' },
   { icon: 'user', title: 'Accessible by design', text: 'Keyboard move input, focus states, reduced-motion support, responsive layouts and readable dark/light themes.' },
   { icon: 'lock', title: 'Operator accountability', text: 'RBAC, MFA, immutable audit logs, dispute review and human-only sanctions before consequential decisions.' },
 ];

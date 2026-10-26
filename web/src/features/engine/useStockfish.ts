@@ -27,6 +27,8 @@ export interface AnalyseInput {
   depth?: number;
   timeMs?: number;
   multipv?: number;
+  /** UCI `Skill Level` (0 weakest, 20 full strength). Omit for full strength. */
+  skillLevel?: number;
 }
 
 type EngineStatus = 'loading' | 'ready' | 'analysing' | 'error';
@@ -181,9 +183,13 @@ export function useStockfish() {
       const position = input.fen === START_FEN
         ? `position startpos${moves.length ? ` moves ${moves.join(' ')}` : ''}`
         : `position fen ${input.fen}${moves.length ? ` moves ${moves.join(' ')}` : ''}`;
+      const skillLevel = Math.min(20, Math.max(0, Math.round(input.skillLevel ?? 20)));
       worker.postMessage('setoption name Threads value 1');
       worker.postMessage('setoption name Hash value 32');
       worker.postMessage(`setoption name MultiPV value ${multipv}`);
+      // Always set the skill level explicitly: a weakened search must never
+      // leak into a later analysis request.
+      worker.postMessage(`setoption name Skill Level value ${skillLevel}`);
       worker.postMessage('ucinewgame');
       worker.postMessage(position);
       worker.postMessage(`go depth ${depth} movetime ${timeMs}`);

@@ -146,6 +146,7 @@ export function Layout() {
             {NAV.map((item) => <NavLink key={item.to} to={item.to} className="nav-link"><Icon name={item.icon} size={16} />{item.label}</NavLink>)}
             <Link className="nav-link" to="/wallet"><Icon name="wallet" size={16} />Wallet</Link>
             <Link className="nav-link" to="/train"><Icon name="play" size={16} />Practice the engine</Link>
+            <Link className="nav-link" to="/boards"><Icon name="board" size={16} />Board studio</Link>
             <Link className="nav-link" to="/help"><Icon name="help" size={16} />Help</Link>
             {(user?.role === 'agent' || user?.role === 'admin') && <Link className="nav-link" to="/agent"><Icon name="wallet" size={16} />Agent</Link>}
             {user?.role === 'admin' && <Link className="nav-link" to="/admin"><Icon name="shield" size={16} />Admin</Link>}
@@ -159,7 +160,7 @@ export function Layout() {
             <Link to="/" className="brand"><span className="brand-mark">♜</span><span className="brand-text"><strong>Rookstone</strong><span>Arena</span></span></Link>
             <p className="small muted" style={{ marginTop: '.75rem' }}>Original competitive chess with an authoritative server. No fake opponents, balances or engine evaluations.</p>
           </div>
-          <div className="footer-links"><strong>Play</strong><Link to="/play">Lobby</Link><Link to="/competitions">Competitions</Link><Link to="/puzzles">Puzzles</Link><Link to="/train">Practice the engine</Link><Link to="/leaderboard">Leaderboard</Link></div>
+          <div className="footer-links"><strong>Play</strong><Link to="/play">Lobby</Link><Link to="/competitions">Competitions</Link><Link to="/puzzles">Puzzles</Link><Link to="/train">Practice the engine</Link><Link to="/boards">Board studio</Link><Link to="/leaderboard">Leaderboard</Link></div>
           <div className="footer-links"><strong>Account</strong><Link to="/wallet">Wallet</Link><Link to="/history">History</Link><Link to="/settings">Settings</Link><Link to="/help">Help</Link></div>
           <div className="footer-links"><strong>Legal</strong><Link to="/legal#terms">Terms</Link><Link to="/legal#privacy">Privacy</Link><Link to="/legal#responsible">Responsible play</Link><Link to="/legal#compliance">Compliance</Link><Link to="/legal#licences">Licences</Link></div>
         </div>

@@ -37,7 +37,8 @@ describe('ChessBoard', () => {
 
   it('hides pointer move controls when the board is disabled', () => {
     renderBoard({ disabled: true, onMove: undefined });
-    expect(screen.getByText(/Stockfish/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /analysis board/i })).toHaveAttribute('href', '/analysis');
+    expect(screen.getByRole('link', { name: /^Practice$/ })).toHaveAttribute('href', '/train');
+    expect(screen.getByRole('link', { name: /^Analysis$/ })).toHaveAttribute('href', '/analysis');
+    expect(screen.getByRole('link', { name: /Change look/i })).toHaveAttribute('href', '/boards');
   });
 });

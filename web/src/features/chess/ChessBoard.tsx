@@ -5,19 +5,21 @@ import {
   Chessboard, defaultArrowOptions, defaultPieces,
   type Arrow, type PieceRenderObject, type PieceDropHandlerArgs, type SquareHandlerArgs,
 } from 'react-chessboard';
-import { PIECE_THEMES, usePreferences, type BoardTheme } from '../../app/ThemeProvider';
+import { BOARD_THEMES, PIECE_THEMES, pieceSrc, usePreferences, type BoardTheme } from '../../app/ThemeProvider';
 import { Icon } from '../../components/Icon';
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const RANKS = ['1', '2', '3', '4', '5', '6', '7', '8'];
 const PIECE_KEYS = ['wP', 'wN', 'wB', 'wR', 'wQ', 'wK', 'bP', 'bN', 'bB', 'bR', 'bQ', 'bK'];
 
-/** Square palettes matching the familiar chess.com boards. */
-const BOARD_COLORS: Record<BoardTheme, { light: string; dark: string }> = {
-  green: { light: '#ebecd0', dark: '#739552' },
-  brown: { light: '#f0d9b5', dark: '#b58863' },
-  blue: { light: '#dee3e6', dark: '#8ca2ad' },
-};
+/** Square palettes live with the preference definitions so Settings and the
+ * board studio can never drift from what the board draws. */
+const BOARD_COLORS: Record<BoardTheme, { light: string; dark: string }> = Object.fromEntries(
+  BOARD_THEMES.map((theme) => [theme.id, { light: theme.light, dark: theme.dark }]),
+) as Record<BoardTheme, { light: string; dark: string }>;
+
+/** Palettes bright enough that the dark-square notation needs white text. */
+const DARK_NOTE_SQUARES = new Set<BoardTheme>(['green', 'brown', 'blue', 'wood']);
 
 const HIGHLIGHT = 'rgba(255, 240, 120, .62)';
 const SELECTED = 'rgba(255, 240, 120, .82)';
@@ -42,11 +44,13 @@ export interface ChessBoardProps {
   arrows?: Arrow[];
   allowArrows?: boolean;
   className?: string;
+  /** Hide the line of links under the board (used by the board studio, which has its own). */
+  showCaption?: boolean;
 }
 
 export function ChessBoard({
   fen, orientation = 'white', onMove, onIllegal, disabled = false,
-  lastMove, legalMoves, arrows = [], allowArrows = true, className = '',
+  lastMove, legalMoves, arrows = [], allowArrows = true, className = '', showCaption = true,
 }: ChessBoardProps) {
   const prefs = usePreferences();
   const [selected, setSelected] = useState<string | null>(null);
@@ -75,7 +79,7 @@ export function ChessBoard({
     if (prefs.pieceTheme === 'staunton') return defaultPieces;
     return Object.fromEntries(PIECE_KEYS.map((key) => [
       key,
-      () => <img className={`piece-image ${prefs.pieceTheme}`} src={`/pieces/${key}.svg`} alt="" draggable={false} />,
+      () => <img className={`piece-image ${prefs.pieceTheme}`} src={pieceSrc(prefs.pieceTheme, key)} alt="" draggable={false} />,
     ])) as PieceRenderObject;
   }, [prefs.pieceTheme]);
 
@@ -160,8 +164,8 @@ export function ChessBoard({
     dropSquareStyle: { boxShadow: 'inset 0 0 0 5px rgba(255,255,255,.72)' },
     squareStyles,
     showNotation: prefs.showCoordinates,
-    darkSquareNotationStyle: { color: colors.light, fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
-    lightSquareNotationStyle: { color: colors.dark, fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
+    darkSquareNotationStyle: { color: DARK_NOTE_SQUARES.has(prefs.boardTheme) ? colors.light : 'rgba(255,255,255,.72)', fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
+    lightSquareNotationStyle: { color: DARK_NOTE_SQUARES.has(prefs.boardTheme) ? colors.dark : 'rgba(10,10,10,.62)', fontSize: 11, fontWeight: 700, letterSpacing: '.02em' },
     arrowOptions: {
       ...defaultArrowOptions,
       colors: { ...defaultArrowOptions.colors, default: '#f2b134', shift: '#7fd1c1', ctrl: '#e8834a', alt: '#9b8cf0', meta: '#7fd1c1' },
@@ -190,7 +194,7 @@ export function ChessBoard({
       attemptMove(sourceSquare, targetSquare);
       return true;
     },
-  }), [fen, boardOrientation, pieces, colors, squareStyles, prefs.showCoordinates, prefs.animations, prefs.reducedMotion,
+  }), [fen, boardOrientation, pieces, colors, squareStyles, prefs.showCoordinates, prefs.animations, prefs.reducedMotion, prefs.boardTheme,
     disabled, keyboardMode, onMove, arrows, allowArrows, selected, turn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const orderedSquares = useMemo(() => {
@@ -251,7 +255,7 @@ export function ChessBoard({
                     aria-label={`Promote to ${({ q: 'queen', r: 'rook', b: 'bishop', n: 'knight' })[piece]}`}>
                     {prefs.pieceTheme === 'staunton'
                       ? <span className="promotion-vector" aria-hidden="true">{({ q: '♕', r: '♖', b: '♗', n: '♘' })[piece]}</span>
-                      : <img className={`piece-image ${prefs.pieceTheme}`} src={`/pieces/${turn === 'w' ? 'w' : 'b'}${piece.toUpperCase()}.svg`} alt="" draggable={false} />}
+                      : <img className={`piece-image ${prefs.pieceTheme}`} src={pieceSrc(prefs.pieceTheme, `${turn === 'w' ? 'w' : 'b'}${piece.toUpperCase()}`)} alt="" draggable={false} />}
                   </button>
                 ))}
               </div>
@@ -307,10 +311,10 @@ export function ChessBoard({
         </div>
       )}
 
-      <div className="board-caption">
+      {showCaption && <div className="board-caption">
         <span>{prefs.showCoordinates ? 'Coordinates visible' : 'Coordinates hidden'} · {(PIECE_THEMES.find((theme) => theme.id === prefs.pieceTheme) ?? PIECE_THEMES[0]).label} pieces</span>
-        <span><Link to="/train">Practice against Stockfish</Link> · <Link to="/analysis">analysis board</Link></span>
-      </div>
+        <span><Link to="/train">Practice</Link> · <Link to="/analysis">Analysis</Link> · <Link to="/boards">Change look</Link></span>
+      </div>}
     </div>
   );
 }

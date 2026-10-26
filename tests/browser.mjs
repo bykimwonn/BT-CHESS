@@ -361,8 +361,21 @@ async function run() {
       pieceSources.length >= 32 && pieceSources.every((src) => /^\/pieces\/[wb][KQRBNP]\.svg$/.test(src)),
       pieceSources.slice(0, 4));
 
+    // Board studio: picking a palette and a piece set must repaint the real board
+    // and survive a reload (the preference is stored, not just previewed).
+    await whitePage.goto(`${base}/boards`, { waitUntil: 'domcontentloaded' });
+    await whitePage.getByRole('button', { name: /Midnight gold/i }).click();
+    await whitePage.getByRole('button', { name: /Chessnut/i }).click();
+    await whitePage.reload({ waitUntil: 'domcontentloaded' });
+    const studioSources = await whitePage.locator('.board-container img').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('src')));
+    check('board studio: chosen piece set is applied and persisted across reloads',
+      studioSources.length >= 32 && studioSources.every((src) => /^\/pieces\/chessnut\/[wb][KQRBNP]\.svg$/.test(src)),
+      studioSources.slice(0, 4));
+    const studioPressed = await whitePage.getByRole('group', { name: 'Board palette' }).getByRole('button', { pressed: true }).innerText();
+    check('board studio: chosen palette is still selected after reload', /Midnight gold/.test(studioPressed), studioPressed);
+
     await pageA.setViewportSize({ width: 390, height: 844 });
-    for (const route of ['/', '/play', '/competitions', '/tournaments', '/puzzles', '/learn', '/train', '/analysis', '/leaderboard', '/wallet', '/settings', '/history', '/help', '/legal']) {
+    for (const route of ['/', '/play', '/competitions', '/tournaments', '/puzzles', '/learn', '/train', '/boards', '/analysis', '/leaderboard', '/wallet', '/settings', '/history', '/help', '/legal']) {
       await pageA.goto(`${base}${route}`, { waitUntil: 'domcontentloaded' });
       const size = await overflow(pageA);
       check(`no horizontal overflow at 390px on ${route}`, size.scrollWidth <= size.innerWidth + 1, size);

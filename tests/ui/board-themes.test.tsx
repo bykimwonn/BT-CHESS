@@ -7,9 +7,9 @@ import { MemoryRouter } from 'react-router-dom';
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 describe('board appearance', () => {
-  it('offers the chess.com-style palettes and piece sets', () => {
-    expect(BOARD_THEMES.map((theme) => theme.id)).toEqual(['green', 'brown', 'blue']);
-    expect(PIECE_THEMES.map((theme) => theme.id)).toEqual(['chesscom', 'meridian', 'staunton']);
+  it('offers every shipped palette and piece set', () => {
+    expect(BOARD_THEMES.map((theme) => theme.id)).toEqual(['green', 'brown', 'blue', 'midnight', 'wood']);
+    expect(PIECE_THEMES.map((theme) => theme.id)).toEqual(['chesscom', 'merida', 'chessnut', 'celtic', 'meridian', 'staunton']);
   });
 
   it('keeps old stored preference ids working', () => {

@@ -16,7 +16,8 @@ Rookstone Arena is a production-oriented online chess competition application bu
 - Secure auth: Argon2id, rotating sessions, CSRF, rate limits, optional TOTP MFA, RBAC, MFA/confirmation for privileged actions, email verification, password recovery, session revocation, security/audit logs.
 - Genuine GPL-3.0 Stockfish 19 Lite WASM UCI engine in browser and Node, with health checks, cancellation, concurrency limits, move-quality summaries and human-review-only fair-play signals.
 - **Practice board**: play the same Stockfish build at eight strengths (Skill Level, depth, think time and deliberate blunders at the lowest levels), with takeback, hints, a move review and PGN export. Practice is unrated, unstaked and never sent to the server.
-- **Board and pieces**: chess.com-style green/brown/blue square palettes with highlighted last move, legal-move dots, capture rings, check glow and matching promotion picker, using the vendored Colin M. L. Burnett Staunton piece set (BSD-3-Clause) that Lichess also ships.
+- **Board studio** (`/boards`): five square palettes (tournament green, warm wood, cool blue, midnight gold, dark walnut) and six piece sets, previewed live on a real board in three positions. The choice is saved in this browser and applies everywhere — play, puzzles, lessons, practice and analysis — via `/api`-free local preferences. Each set shows its author and licence next to it.
+- **Board and pieces**: highlighted last move, legal-move dots, capture rings, check glow and a promotion picker that follows the chosen set. The default is the vendored Colin M. L. Burnett Staunton set that Lichess also ships; Merida (GPL-2.0-or-later), Chessnut (Apache-2.0) and Celtic (MIT) are vendored alongside it.
 - Free international tournaments with real entrants, deterministic Swiss-style pairing, standings and no financial transactions.
 - Voluntary country flags, IANA timezone preferences, UTC storage/local-time display, jurisdiction policies, signed age/identity/location verification integration, account-currency separation and explicit multi-currency rate/quote design.
 - Puzzles, lessons, leaderboard, profiles, history, settings, help, legal policies, notifications, disputes, responsible-play controls and a full admin dashboard.
@@ -98,7 +99,7 @@ web/                    React 19 + Vite + TypeScript client
   src/features/engine/  browser Stockfish UCI worker hook, analysis panel and practice levels
   src/pages/            landing, play, competitions, game, puzzles, learn, train, analysis, wallet, admin, legal…
   public/engine/        vendored GPL-3.0 Stockfish 19 lite-single WASM distribution
-  public/pieces/        vendored Colin M. L. Burnett Staunton piece set (BSD-3-Clause)
+  public/pieces/        four vendored piece sets (cburnett default, merida, chessnut, celtic)
 server/                 Express 4 + Socket.IO authoritative API
   db/migrations/        versioned PostgreSQL schema
   auth/                 sessions, Argon2id, TOTP, CSRF, password recovery

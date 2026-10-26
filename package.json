@@ -6,7 +6,7 @@
   "description": "Rookstone Arena - competitive online chess with an authoritative server, double-entry ledger and compliance-gated competitions",
   "license": "MIT",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.12.0 <23"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
@@ -17,7 +17,7 @@
     "build:web": "vite build",
     "start": "node dist-server/server/index.js",
     "typecheck": "tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json",
-    "test": "npm run test:unit && npm run test:integration && npm run test:ui && npm run test:e2e && npm run test:browser",
+    "test": "npm run test:unit && npm run test:integration && npm run test:ui && npm run test:e2e && npm run test:deploy && npm run test:browser",
     "test:unit": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx --test tests/integration/*.test.ts",
     "test:ui": "vitest run --config vitest.config.ts",
@@ -27,7 +27,8 @@
     "reconcile": "tsx scripts/reconcile.ts",
     "vendor:engine": "node scripts/vendor-engine.mjs",
     "postinstall": "node scripts/vendor-engine.mjs",
-    "test:browser": "npm run build:server && npm run build:web && node tests/browser.mjs"
+    "test:browser": "npm run build:server && npm run build:web && node tests/browser.mjs",
+    "test:deploy": "npm run build:server && node tests/deploy-entrypoint.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.11",

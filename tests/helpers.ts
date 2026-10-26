@@ -13,12 +13,16 @@ process.env.LOG_LEVEL = process.env.TEST_LOG_LEVEL ?? 'silent';
 process.env.ENGINE_ENABLED = 'false';
 process.env.OPERATING_MODE = process.env.TEST_OPERATING_MODE ?? 'test';
 process.env.TEST_FUNDS_ENABLED = 'true';
-process.env.COMPLIANCE_ACTIVATION_PATH = path.join(os.tmpdir(), 'rookstone-no-activation.json');
+// A file may pre-set its own signed manifest (the real-mode cash tests do);
+// otherwise point at a path that deliberately does not exist.
+process.env.COMPLIANCE_ACTIVATION_PATH =
+  process.env.COMPLIANCE_ACTIVATION_PATH ?? path.join(os.tmpdir(), 'rookstone-no-activation.json');
 process.env.AGE_VERIFICATION_PROVIDER = 'Test18Plus';
 process.env.AGE_VERIFICATION_WEBHOOK_SECRET = 'integration-test-age-verification-secret-0123456789';
 // Tests must never open an SMTP connection or send mail, even when the
 // developer's local .env configures Gmail.
 process.env.EMAIL_PROVIDER = 'none';
+process.env.CASH_AGENTS_ENABLED = 'true';
 process.env.SMTP_URL = '';
 process.env.SMTP_HOST = '';
 

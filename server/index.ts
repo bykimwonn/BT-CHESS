@@ -218,8 +218,11 @@ async function main(): Promise<void> {
     timers.push(
       setInterval(() => { void tick(); }, 1_000),
       setInterval(() => {
-        void Promise.all([ctx!.competition.expireChallenges(), ctx!.competition.cleanupTickets()])
-          .catch((error) => log.warn({ err: (error as Error).message }, 'lobby cleanup failed'));
+        void Promise.all([
+          ctx!.competition.expireChallenges(),
+          ctx!.competition.cleanupTickets(),
+          ctx!.cash.expireStale(),
+        ]).catch((error) => log.warn({ err: (error as Error).message }, 'lobby cleanup failed'));
       }, 30_000),
       setInterval(() => {
         void ctx!.settlement.settlePending().then((result) => {

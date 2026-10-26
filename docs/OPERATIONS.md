@@ -14,7 +14,8 @@ In the admin dashboard check:
 2. Ledger → reconciliation must report zero discrepancies and zero unbalanced posted transactions.
 3. Commission → fee account balance equals the sum of posted settlement fees.
 4. Providers → each configured provider is healthy and in the correct sandbox/production environment.
-5. Security → recent admin actions and security events.
+5. Agents (when the cash channel is on) → each agent's cash on hand matches the drawer; open codes are recent and within limits; record the daily remittance. See [CASH-AGENTS.md](CASH-AGENTS.md).
+6. Security → recent admin actions and security events.
 
 ## Scheduled jobs inside the API process
 

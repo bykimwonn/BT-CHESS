@@ -57,6 +57,16 @@ Two distinct EcoCash APIs are used:
 
 The direct adapter is disabled. No verified public direct merchant API contract was available during implementation; the official site provides merchant onboarding information rather than a complete public payments API specification. OneMoney may be reachable through an approved aggregator such as Paynow once the merchant account is approved. The UI does not imply a working direct integration.
 
+## Cash-agent vouchers
+
+Gateways are not the only deposit path. When a provider merchant account is
+unavailable, the counter rail in [CASH-AGENTS.md](CASH-AGENTS.md) takes cash at
+an agent and credits the player through a short-lived code. It is gated by
+`CASH_AGENTS_ENABLED` plus the same compliance state, posts ordinary balanced
+journals against an agent float account, and refuses cash payouts unless real
+mode is authorised. Use it for deposits when no gateway is approved; it does not
+substitute for the licence and approval evidence in [GO-LIVE.md](GO-LIVE.md).
+
 ## Adding another provider
 
 1. Implement `PaymentAdapter` in `server/payments/adapters/`.

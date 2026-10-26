@@ -44,6 +44,8 @@ services:
         sync: false
       - key: OPERATING_MODE
         value: free
+      - key: CASH_AGENTS_ENABLED
+        value: "false"
       - key: TRUST_PROXY
         value: "1"
       - key: ALLOW_EMBEDDED_DB

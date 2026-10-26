@@ -9,8 +9,11 @@ import { PageHeader, EmptyState, ErrorState } from '../components/PageHeader';
 import { ProviderHealthCard } from '../components/Competition';
 import { Icon } from '../components/Icon';
 
-type Tab = 'overview' | 'users' | 'games' | 'disputes' | 'fairplay' | 'ledger' | 'providers' | 'security' | 'responsible' | 'compliance';
-const TABS: Tab[] = ['overview', 'users', 'games', 'disputes', 'fairplay', 'ledger', 'providers', 'security', 'responsible', 'compliance'];
+type Tab = 'overview' | 'users' | 'games' | 'disputes' | 'fairplay' | 'ledger' | 'providers' | 'agents' | 'security' | 'responsible' | 'compliance';
+const TABS: Tab[] = ['overview', 'users', 'games', 'disputes', 'fairplay', 'ledger', 'providers', 'agents', 'security', 'responsible', 'compliance'];
+
+/** Agent codes are letters and digits only, always upper case. */
+function agentCodeDraft(value: string): string { return value.replace(/[^A-Za-z0-9]/g, '').toUpperCase(); }
 
 export function AdminPage() {
   const { mfaEnabled } = useAuth();
@@ -31,6 +34,9 @@ export function AdminPage() {
   const [restriction, setRestriction] = useState({ userId: '', type: 'daily_deposit_limit', value: '100', expiresAt: '' });
   const [commission, setCommission] = useState('500');
   const [testEmailTo, setTestEmailTo] = useState('');
+  const [agentForm, setAgentForm] = useState({ usernameOrEmail: '', code: '', name: '', location: '', voucherLimit: '1000', dailyDepositLimit: '5000', dailyPayoutLimit: '5000' });
+  const [remitForm, setRemitForm] = useState<{ agentId: string; amount: string; reference: string } | null>(null);
+  const [tellerCode, setTellerCode] = useState('');
 
   const production = import.meta.env.PROD;
   const mfaReady = mfaEnabled ? mfaCode.length === 6 : !production;
@@ -71,6 +77,10 @@ export function AdminPage() {
   const withdrawals = useQuery({ queryKey: ['admin', 'withdrawals', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/withdrawals'), enabled: mfaReady && tab === 'providers' });
   const providerEvents = useQuery({ queryKey: ['admin', 'provider-events', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/provider-events'), enabled: mfaReady && tab === 'providers' });
   const emailStatus = useQuery({ queryKey: ['admin', 'email', mfaReady], queryFn: () => adminApi<Record<string, any>>('/admin/email'), enabled: mfaReady && tab === 'providers' });
+  const cashAgents = useQuery({ queryKey: ['admin', 'cash-agents', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/cash-agents'), enabled: mfaReady && tab === 'agents' });
+  const cashVouchers = useQuery({ queryKey: ['admin', 'cash-vouchers', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/cash-vouchers?limit=200'), enabled: mfaReady && tab === 'agents' });
+  const voucherFilter = agentCodeDraft(tellerCode).slice(-4);
+  const visibleVouchers = (cashVouchers.data?.items ?? []).filter((row) => !voucherFilter || String(row.codeLast4) === voucherFilter);
   const securityEvents = useQuery({ queryKey: ['admin', 'security-events', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/security-events'), enabled: mfaReady && tab === 'security' });
   const auditLogs = useQuery({ queryKey: ['admin', 'audit-logs', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/audit-logs'), enabled: mfaReady && tab === 'security' });
   const adminActions = useQuery({ queryKey: ['admin', 'actions', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/actions'), enabled: mfaReady && tab === 'security' });
@@ -216,6 +226,95 @@ export function AdminPage() {
         <section className="card"><h2 className="card-title">Withdrawals</h2><div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Provider</th><th>Amount</th><th>Status</th><th>Destination</th></tr></thead><tbody>{withdrawals.data?.items.map((row) => <tr key={String(row.id)}><td>{String(row.username)}</td><td>{String(row.provider)}</td><td>{formatMoney(Number(row.amount_cents))}</td><td>{String(row.status)}</td><td>{String(row.destination)}</td></tr>)}</tbody></table></div></section>
         <section className="card"><h2 className="card-title">Provider events</h2><div className="table-wrap" style={{ maxHeight: 300, overflowY: 'auto' }}><table className="table"><thead><tr><th>Received</th><th>Provider</th><th>Signature</th><th>Event</th><th>Processed</th></tr></thead><tbody>{providerEvents.data?.items.map((row) => <tr key={String(row.id)}><td>{new Date(String(row.received_at)).toLocaleString()}</td><td>{String(row.provider)}</td><td>{row.signature_valid ? 'valid' : 'invalid'}</td><td className="mono tiny">{String(row.event_id).slice(0, 30)}</td><td>{row.processed_at ? 'yes' : 'no'}</td></tr>)}</tbody></table></div></section>
       </div><ProviderHealthCard /></div>}
+
+      {mfaReady && tab === 'agents' && <div className="split"><div className="stack">
+        <section className="card">
+          <div className="card-header"><div><h2 className="card-title">Cash agents</h2>
+            <p className="card-subtitle">Teller codes, float custody and daily limits. Cash on hand is the negative balance of the agent's custody account.</p></div>
+            <span className="pill">{cashAgents.data?.items.length ?? 0}</span></div>
+          {cashAgents.error && <ErrorState message={errorMessage(cashAgents.error)} retry={() => void cashAgents.refetch()} />}
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th>Agent</th><th>Cash on hand</th><th>Today in / out</th><th>Open</th><th>Status</th><th /></tr></thead>
+            <tbody>{cashAgents.data?.items.map((row) => (
+              <tr key={String(row.id)}>
+                <td><strong className="mono">{String(row.code)}</strong><div className="tiny muted">{String(row.name)}{row.location ? ` · ${String(row.location)}` : ''}<br />{String(row.username)}</div></td>
+                <td>{formatMoney(Number(row.cashHeldCents))}<div className="tiny muted">limit {formatMoney(Number(row.voucherLimitCents))}/code</div></td>
+                <td className="small">{formatMoney(Number(row.todayDepositCents))} / {formatMoney(Number(row.todayPayoutCents))}</td>
+                <td>{Number(row.openVouchers)}</td>
+                <td><span className={`pill ${row.status === 'active' ? 'pill-success' : 'pill-danger'}`}>{String(row.status)}</span></td>
+                <td className="row-wrap">
+                  <button className="btn btn-sm" disabled={busy || Number(row.cashHeldCents) <= 0} onClick={() => setRemitForm({ agentId: String(row.id), amount: (Number(row.cashHeldCents) / 100).toFixed(2), reference: '' })}>Remit</button>
+                  <button className="btn btn-sm" disabled={busy} onClick={() => void action(`/admin/cash-agents/${String(row.id)}/status`, { status: row.status === 'active' ? 'suspended' : 'active' })}>{row.status === 'active' ? 'Suspend' : 'Resume'}</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+          {remitForm && <div className="alert" style={{ marginTop: '.75rem' }}>
+            <strong>Record cash handed in</strong>
+            <div className="row-wrap" style={{ marginTop: '.5rem' }}>
+              <label className="field" style={{ minWidth: 130 }}><span className="field-label">Amount (USD)</span>
+                <input className="input" type="number" min="0.01" step="0.01" value={remitForm.amount} onChange={(e) => setRemitForm({ ...remitForm, amount: e.target.value })} /></label>
+              <label className="field grow" style={{ minWidth: 180 }}><span className="field-label">Bank slip / reference</span>
+                <input className="input" value={remitForm.reference} onChange={(e) => setRemitForm({ ...remitForm, reference: e.target.value })} /></label>
+              <button className="btn btn-sm" style={{ marginTop: '1.2rem' }} disabled={busy || remitForm.reference.trim().length < 2}
+                onClick={() => void action(`/admin/cash-agents/${remitForm.agentId}/remit`, { amountCents: Math.round(Number(remitForm.amount) * 100), reference: remitForm.reference }).then(() => setRemitForm(null))}>Confirm remittance</button>
+              <button className="btn btn-sm" style={{ marginTop: '1.2rem' }} onClick={() => setRemitForm(null)}>Cancel</button>
+            </div>
+          </div>}
+        </section>
+
+        <section className="card">
+          <div className="card-header"><div><h2 className="card-title">Cash vouchers</h2>
+            <p className="card-subtitle">Codes are stored as hashes, so staff cannot retrieve a lost code; cancel it and issue a new one. Search by the last four characters the player reads out.</p></div>
+            <div className="row-wrap" style={{ alignItems: 'center' }}>
+              <input className="input mono" style={{ width: 140 }} value={tellerCode} onChange={(e) => setTellerCode(agentCodeDraft(e.target.value))} placeholder="last 4" aria-label="Filter vouchers by last four characters" />
+              <span className="pill">{visibleVouchers.length} / {cashVouchers.data?.items.length ?? 0}</span>
+            </div></div>
+          <div className="table-wrap" style={{ maxHeight: 340, overflowY: 'auto' }}><table className="table">
+            <thead><tr><th>Issued</th><th>Agent</th><th>Type</th><th>Amount</th><th>Player</th><th>Status</th><th /></tr></thead>
+            <tbody>{visibleVouchers.map((row) => (
+              <tr key={String(row.id)}>
+                <td className="tiny">{new Date(String(row.issuedAt)).toLocaleString()}<div className="mono tiny muted">••••{String(row.codeLast4)}</div></td>
+                <td className="mono tiny">{String(row.agentCode)}</td>
+                <td className="small">{String(row.kind)}{row.sandbox ? ' · test' : ''}</td>
+                <td>{formatMoney(Number(row.amountCents))}</td>
+                <td className="small">{row.playerUsername ? String(row.playerUsername) : '—'}</td>
+                <td><span className={`pill ${row.status === 'redeemed' || row.status === 'paid' ? 'pill-success' : row.status === 'issued' ? 'pill-accent' : 'pill-danger'}`}>{String(row.status)}</span></td>
+                <td>{row.status === 'issued' && <button className="btn btn-sm" disabled={busy} onClick={() => void action(`/admin/cash-vouchers/${String(row.id)}/cancel`, { reason })}>Cancel</button>}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </section>
+      </div><div className="stack">
+        <section className="card">
+          <div className="card-header"><h2 className="card-title">Register a cash agent</h2></div>
+          <div className="stack">
+            <p className="tiny muted" style={{ marginBottom: 0 }}>The account must already exist. Registering promotes it to the agent role and gives it a custody float account. Uses the MFA code, confirmation and reason above.</p>
+            <label className="field"><span className="field-label">Username or email</span>
+              <input className="input" value={agentForm.usernameOrEmail} onChange={(e) => setAgentForm({ ...agentForm, usernameOrEmail: e.target.value })} placeholder="TellerOne" /></label>
+            <div className="row"><label className="field grow"><span className="field-label">Agent code</span>
+              <input className="input mono" value={agentCodeDraft(agentForm.code)} onChange={(e) => setAgentForm({ ...agentForm, code: agentCodeDraft(e.target.value) })} placeholder="BTM01" /></label>
+              <label className="field grow"><span className="field-label">Display name</span>
+              <input className="input" value={agentForm.name} onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })} placeholder="Bulawayo Main" /></label></div>
+            <label className="field"><span className="field-label">Location</span>
+              <input className="input" value={agentForm.location} onChange={(e) => setAgentForm({ ...agentForm, location: e.target.value })} placeholder="8th Avenue, Bulawayo" /></label>
+            <div className="row"><label className="field grow"><span className="field-label">Per-code limit (USD)</span>
+              <input className="input" type="number" min="1" value={agentForm.voucherLimit} onChange={(e) => setAgentForm({ ...agentForm, voucherLimit: e.target.value })} /></label>
+              <label className="field grow"><span className="field-label">Daily in (USD)</span>
+              <input className="input" type="number" min="1" value={agentForm.dailyDepositLimit} onChange={(e) => setAgentForm({ ...agentForm, dailyDepositLimit: e.target.value })} /></label>
+              <label className="field grow"><span className="field-label">Daily out (USD)</span>
+              <input className="input" type="number" min="1" value={agentForm.dailyPayoutLimit} onChange={(e) => setAgentForm({ ...agentForm, dailyPayoutLimit: e.target.value })} /></label></div>
+            <button className="btn btn-primary btn-block" disabled={busy || !confirmed || reason.trim().length < 8 || agentForm.usernameOrEmail.trim().length < 3 || agentForm.code.trim().length < 3}
+              onClick={() => void action('/admin/cash-agents', {
+                usernameOrEmail: agentForm.usernameOrEmail.trim(), code: agentForm.code.trim(), name: agentForm.name.trim() || agentForm.usernameOrEmail.trim(),
+                location: agentForm.location.trim() || undefined,
+                voucherLimitCents: Math.round(Number(agentForm.voucherLimit) * 100),
+                dailyDepositLimitCents: Math.round(Number(agentForm.dailyDepositLimit) * 100),
+                dailyPayoutLimitCents: Math.round(Number(agentForm.dailyPayoutLimit) * 100),
+              })}>Register agent</button>
+          </div>
+        </section>
+      </div></div>}
 
       {mfaReady && tab === 'security' && <div className="stack">
         <section className="card"><h2 className="card-title">Recent admin actions</h2><div className="table-wrap"><table className="table"><thead><tr><th>Date</th><th>Actor</th><th>Action</th><th>Target</th><th>Reason</th><th>Outcome</th></tr></thead><tbody>{adminActions.data?.items.map((row) => <tr key={String(row.id)}><td>{new Date(String(row.created_at)).toLocaleString()}</td><td className="mono tiny">{String(row.actor_id).slice(0, 8)}</td><td>{String(row.action)}</td><td>{String(row.target_id).slice(0, 12)}</td><td>{String(row.reason)}</td><td>{String(row.outcome)}</td></tr>)}</tbody></table></div></section>

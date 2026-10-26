@@ -8,6 +8,7 @@ export const SYSTEM_ACCOUNTS = {
   platformFee: '00000000-0000-4000-8000-000000000002',
   external: '00000000-0000-4000-8000-000000000003',
   providerClearing: '00000000-0000-4000-8000-000000000004',
+  platformBank: '00000000-0000-4000-8000-000000000005',
 } as const;
 
 export type SystemAccountRole = keyof typeof SYSTEM_ACCOUNTS;
@@ -27,11 +28,17 @@ export interface PostTransactionInput {
 }
 export interface PostTransactionResult { id: string; duplicate: boolean; posted: boolean }
 
+/** Accounts whose balance is expected to be negative (cash held, not owed). */
+const CUSTODY_OWNER_TYPES = new Set(['external', 'platform_bank', 'cash_agent']);
+
 const SYSTEM_ACCOUNT_META: Record<SystemAccountRole, { ownerType: string; kind: string }> = {
   platformCash: { ownerType: 'platform_cash', kind: 'liability' },
   platformFee: { ownerType: 'platform_fee', kind: 'income' },
   external: { ownerType: 'external', kind: 'asset' },
   providerClearing: { ownerType: 'provider_clearing', kind: 'asset' },
+  // Cash physically held by the operator. Like the external counter-account,
+  // custody balances are negative: cash held = -balance.
+  platformBank: { ownerType: 'platform_bank', kind: 'asset' },
 };
 
 function deterministicUuid(seed: string): string {
@@ -139,7 +146,10 @@ export class LedgerService {
       const account = locked.get(id)!;
       const nextAvailable = account.purpose === 'reserved' ? account.available_cents : account.available_cents + delta;
       const nextReserved = account.purpose === 'reserved' ? account.reserved_cents + delta : account.reserved_cents;
-      const mayGoNegative = account.owner_type === 'external';
+      // Custody accounts hold negative balances by design: cash in the
+      // operator's hands (external, platform bank) and cash in an agent's
+      // hands (float) are the inverse of the liability they back.
+      const mayGoNegative = CUSTODY_OWNER_TYPES.has(account.owner_type);
       if (!mayGoNegative && (nextAvailable < 0 || nextReserved < 0)) throw conflict('Insufficient available or reserved funds');
     }
 

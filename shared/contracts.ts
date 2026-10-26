@@ -6,7 +6,7 @@
 export type OperatingMode = 'free' | 'test' | 'real';
 export type CurrencyCode = string;
 export const LEDGER_BASE_CURRENCY = 'USD';
-export type Role = 'player' | 'admin';
+export type Role = 'player' | 'admin' | 'agent';
 export type GameStatus = 'waiting' | 'active' | 'finished' | 'void' | 'abandoned' | 'disputed';
 export type GameResult = 'white' | 'black' | 'draw' | 'void';
 export type Termination =

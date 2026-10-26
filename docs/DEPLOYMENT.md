@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js >= 22.12 and npm >= 10.
+- Node.js 22.x (verified on 22.22.3) and npm >= 10. The `engines` range in `package.json` deliberately excludes major versions that have not been verified; `.node-version` records the tested runtime.
 - PostgreSQL 16+ for production. PGlite is supported for local development, tests and intentional single-node deployments.
 - HTTPS termination with the exact public origin in `PUBLIC_ORIGIN` and `CORS_ORIGINS`.
 - `SESSION_SECRET` with at least 32 random characters; generate with `openssl rand -hex 32`.
@@ -12,7 +12,7 @@
 ## Reproducible build
 
 ```bash
-npm ci
+npm ci --include=dev
 npm run typecheck
 npm run build
 npm test
@@ -66,9 +66,32 @@ docker run --rm -p 3001:3001 \
   rookstone-arena
 ```
 
+## Hosting start command compatibility
+
+The canonical start command is `npm start`, which runs the compiled ESM entrypoint `dist-server/server/index.js`. Some platforms keep an older dashboard-level start command such as `node server.js` even after the repository changes. The repository therefore ships a thin `server.js` compatibility shim:
+
+- it imports the compiled server into the same process, so health checks, logs and `SIGTERM` handling behave normally;
+- if `dist-server/server/index.js` is absent, it runs `npm run build` once (disable with `ROOKSTONE_SKIP_AUTO_BUILD=true`);
+- if the build still cannot be produced, it exits with code 1 and prints the required build/start/Node settings instead of a bare `MODULE_NOT_FOUND` stack trace.
+
+`npm run test:deploy` executes that exact stale command in production mode against an embedded database, asserts `/api/health` succeeds, asserts clean shutdown, and asserts the missing-build path fails loudly. Do not add application logic to `server.js`; it must stay a compatibility entrypoint only.
+
+Checklist for any host:
+
+| Setting | Value |
+| --- | --- |
+| Build command | `npm ci --include=dev && npm run build` |
+| Start command | `npm start` (or, if the dashboard is stale, `node server.js`) |
+| Health check path | `/api/health` |
+| Node version | `22.22.3` |
+
 ## Render
 
-`render.yaml` defines a Node web service with `npm ci && npm run build`, `npm start`, health check `/api/health`, and a managed PostgreSQL database. Set `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `PUBLIC_ORIGIN`, `CORS_ORIGINS` and `EMAIL_FROM` as secret or explicit environment values in the Render dashboard. Do not use Render's expiring free PostgreSQL for financial data.
+`render.yaml` defines a Node web service with `npm ci --include=dev && npm run build`, `npm start`, `NODE_VERSION=22.22.3`, health check `/api/health`, and a managed PostgreSQL database. Set `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `PUBLIC_ORIGIN`, `CORS_ORIGINS` and `EMAIL_FROM` as secret or explicit environment values in the Render dashboard. Do not use Render's expiring free PostgreSQL for financial data.
+
+If an existing Render service was created with an older start command, either clear the dashboard override so `render.yaml` applies, or set the start command to `npm start`. Leaving it as `node server.js` also works through the compatibility shim. A bare `Error: Cannot find module '/opt/render/project/src/server.js'` from before this shim was added means the deploy used a checkout that did not contain `server.js`; redeploy from `main` and confirm the build log shows the current commit.
+
+Production startup is fail-closed. If the service exits with a configuration error, check the log for the missing setting: `SESSION_SECRET` must be at least 32 characters, and either `DATABASE_URL` must point at PostgreSQL or `ALLOW_EMBEDDED_DB=true` must be set for an intentional single-node PGlite deployment. `PORT` is injected by Render and must not be set manually.
 
 ## Railway
 

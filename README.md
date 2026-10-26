@@ -42,7 +42,7 @@ npm run build
 npm start
 ```
 
-`npm start` serves `dist/web` and `dist-server/server/index.js`. Run it from the repository root so migration paths and static assets resolve correctly.
+`npm start` serves `dist/web` and `dist-server/server/index.js`. Run it from the repository root so migration paths and static assets resolve correctly. A `server.js` compatibility entrypoint also exists for hosts whose dashboard still runs the older `node server.js` command; it launches the same compiled server and prints actionable guidance if the build is missing.
 
 Create an initial administrator (set strong values in your shell, not in Git):
 
@@ -74,6 +74,7 @@ npm test
 | UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, theme, dialogs, quote disclosure |
 | Server E2E | `npm run test:e2e` | two authenticated Socket.IO clients, duplicate/stale moves, PGN, ratings, wallet, persistence across restart |
 | Browser | `npm run test:browser` | real npm-packaged Chromium: free/money mode choice, two users in different timezones, private invitations, reconnection, engine WASM, RBAC, wallet, mobile overflow, restart |
+| Deployment | `npm run test:deploy` | stale `node server.js` start command, health check, clean shutdown, missing-build guidance, fail-closed configuration, pinned Node runtime |
 
 The browser suite builds the production bundle, starts the compiled server with a fresh PGlite database, launches a real Chromium binary from `@sparticuz/chromium` via `playwright-core`, and does not require an external browser download in this environment.
 

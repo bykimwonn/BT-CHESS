@@ -10,7 +10,7 @@ services:
     name: rookstone-arena
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -18,6 +18,8 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
+      - key: NODE_VERSION
+        value: "22.22.3"
       - key: DATABASE_URL
         fromDatabase:
           name: rookstone-db

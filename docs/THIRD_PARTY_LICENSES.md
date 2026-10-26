@@ -15,13 +15,20 @@ GPL obligations: if you distribute the browser bundle or container image contain
 
 ## Chess piece SVGs
 
-`web/public/pieces/*.svg` are the **Colin M. L. Burnett** chess set (the set used by Lichess and visually the familiar "chess.com" Staunton look), vendored unchanged into the repository so the application never fetches art from a CDN at runtime.
+`web/public/pieces` contains four vendored piece sets. None of them is covered by this project's MIT licence.
 
-- Author: Colin M. L. Burnett.
-- Source: [lichess-org/lila `public/piece/cburnett`](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett) (mirrors Wikimedia Commons `Chess_*t45.svg`).
-- Licence: triple-licensed **GPL-2.0-or-later / BSD-3-Clause / CC-BY-SA-3.0**. This project uses the **BSD-3-Clause** option; the artwork itself is not relicensed as MIT.
+| Folder | Set | Author | Licence used here | Source |
+| --- | --- | --- | --- | --- |
+| `web/public/pieces/*.svg` | cburnett / "Classic Staunton" (default) | Colin M. L. Burnett | GPL-2.0-or-later (author also offers BSD-3-Clause / CC-BY-SA-3.0) | [lichess-org/lila `cburnett`](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett), originals on Wikimedia Commons as `Chess_*t45.svg` |
+| `web/public/pieces/merida` | Merida | Armando Hernandez Marroquin | GPL-2.0-or-later | [lila `merida`](https://github.com/lichess-org/lila/tree/master/public/piece/merida) |
+| `web/public/pieces/chessnut` | Chessnut | Alexis Luengas | Apache-2.0 | [LexLuengas/chessnut-pieces](https://github.com/LexLuengas/chessnut-pieces) via [lila](https://github.com/lichess-org/lila/tree/master/public/piece/chessnut) |
+| `web/public/pieces/celtic` | Celtic | Maurizio Monge | MIT | [maurimo/chess-art](https://github.com/maurimo/chess-art) via [lila](https://github.com/lichess-org/lila/tree/master/public/piece/celtic) |
+
 - Attribution and per-file notes: `web/public/pieces/ATTRIBUTION.md`.
-- The alternative vector set is the default provided by the MIT-licensed `react-chessboard` package.
+- The default set is distributed here under **GPL-2.0-or-later**, the licence the upstream Lichess tree states for it. The author's original upload also offers BSD-3-Clause and CC-BY-SA-3.0; whichever option an operator relies on, `web/public/pieces/ATTRIBUTION.md` must stay in the build and be reachable from the app.
+- The **Merida** set is GPL-2.0-or-later. This application already distributes GPL-3.0 Stockfish, so the build is a mixed-licence distribution and the GPL notices under `docs/licenses/` apply to those files too. Removing the folder just removes that set from the picker; the rest of the app stays MIT.
+- The **Chessnut** set is Apache-2.0 and the **Celtic** set is MIT; both require keeping the copyright and permission notices, which are in `ATTRIBUTION.md` and this file.
+- The alternative vector set (`Vector outline` in the picker) is the MIT-licensed default from `react-chessboard` and ships no image files.
 
 ## Other dependencies
 

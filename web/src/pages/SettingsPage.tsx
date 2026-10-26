@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EligibilityView, PlatformStatus } from '@shared/contracts';
 import { browserTimeZone, countryOptions, formatLocalDateTime, isValidTimeZone } from '@shared/countries';
@@ -214,6 +214,8 @@ export function SettingsPage() {
             <button className="btn" aria-pressed={prefs.theme === 'light'} onClick={() => prefs.setTheme('light')}><Icon name="sun" size={16} /> Light</button></div>
           <label className="field"><span className="field-label">Board theme</span><select className="select" value={prefs.boardTheme} onChange={(e) => prefs.set('boardTheme', e.target.value as typeof prefs.boardTheme)}>{BOARD_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}</select></label>
           <label className="field"><span className="field-label">Piece theme</span><select className="select" value={prefs.pieceTheme} onChange={(e) => prefs.set('pieceTheme', e.target.value as typeof prefs.pieceTheme)}>{PIECE_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}</select></label>
+          <Link className="btn btn-sm" to="/boards"><Icon name="board" size={16} /> Open the board studio — see every board and piece set</Link>
+
         </div></section>
         <aside className="card"><h2 className="card-title">Board behaviour</h2><div className="stack" style={{ gap: '.7rem' }}>
           <label className="checkbox"><input type="checkbox" checked={prefs.showCoordinates} onChange={(e) => prefs.set('showCoordinates', e.target.checked)} /> Show coordinates</label>

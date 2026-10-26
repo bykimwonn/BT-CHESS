@@ -6,12 +6,13 @@ Date: **26 October 2026 (UTC)**. This report intentionally separates verified re
 
 | Requirement | Verification |
 | --- | --- |
-| Production build and tests | `npm run typecheck`, `npm run build`, `npm test`: exit 0. 74 test cases + 72 E2E/browser/deployment checks, 0 failures. A clean `npm ci` also exited 0 and vendored the GPL engine. See [TESTING.md](TESTING.md). |
+| Production build and tests | `npm run typecheck`, `npm run build`, `npm test`: exit 0. 135 test cases + 81 E2E/browser/deployment checks, 0 failures. A clean `npm ci` also exited 0 and vendored the GPL engine. See [TESTING.md](TESTING.md). |
 | Obsolete product replaced | Root `server.js`, legacy `public/`, `lib/` and old tests removed; new `server/`, `web/`, `shared/`, migrations, tests and docs added. |
-| Responsive actual UI | Real Chromium at 1440×900 and 390×844; ten routes had no horizontal overflow at 390 px; dark/light theme, focus-visible CSS, keyboard board and reduced-motion support implemented. |
+| Responsive actual UI | Real Chromium at 1440×900 and 390×844; sixteen routes (including `/train` and `/boards`) had no horizontal overflow at 390 px; dark/light theme, focus-visible CSS, keyboard board and reduced-motion support implemented. |
 | Legal chess and terminal results | `chess.js` unit/integration tests, checkmate/stalemate/insufficient material/threefold/fifty-move/promotion, server-authoritative timeout/resignation/draw and browser game verified. |
 | Genuine Stockfish | Server UCI handshake reports `Stockfish 19 Lite WASM`; browser worker produced a real UCI best move; no evaluation is hardcoded. GPL licence and sources included. |
 | Practice board | `/train` plays the same Stockfish build at eight strengths. A real Chromium run drags e2–e4, waits for the engine's reply from the browser worker, checks the move list and asserts the evaluation bar shows a parsed score. Unit tests cover the ladder and UCI parsing. Practice games are never rated, staked or persisted. |
+| Board studio | `/boards` previews five palettes and six piece sets on the real board. A Chromium run picks Midnight gold + Chessnut, reloads the page and asserts the board still serves `/pieces/chessnut/*.svg` with that palette pressed; jsdom tests assert every rendered piece src comes from the chosen folder and that legacy preference ids still resolve. |
 | Two authenticated users playing online | Node Socket.IO E2E and two isolated real Chromium contexts played `e4`/`e5`; stale versions and duplicate nonces were rejected. |
 | Persistence after restart | Both E2E suites restarted the compiled API process against the same PGlite directory; session, game, PGN, version, clocks and ledger balance survived. |
 | Actionable signup errors | Registration failures name the field (`Password: Include an uppercase letter`) with a `fields` map instead of "Invalid request"; an unusable mobile time zone falls back to UTC and never blocks signup. Covered by 3 integration tests and 5 UI tests, plus a real-browser registration through the form. |

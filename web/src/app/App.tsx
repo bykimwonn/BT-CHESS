@@ -12,6 +12,7 @@ import { PuzzlesPage } from '../pages/PuzzlesPage';
 import { LearnPage } from '../pages/LearnPage';
 import { AnalysisPage } from '../pages/AnalysisPage';
 import { TrainPage } from '../pages/TrainPage';
+import { BoardsPage } from '../pages/BoardsPage';
 import { LeaderboardPage } from '../pages/LeaderboardPage';
 import { WalletPage } from '../pages/WalletPage';
 import { ProfilePage } from '../pages/ProfilePage';
@@ -40,6 +41,7 @@ export function App() {
         <Route path="learn" element={<LearnPage />} />
         <Route path="analysis" element={<AnalysisPage />} />
         <Route path="train" element={<TrainPage />} />
+        <Route path="boards" element={<BoardsPage />} />
         <Route path="leaderboard" element={<LeaderboardPage />} />
         <Route path="profile/:username" element={<ProfilePage />} />
         <Route path="help" element={<HelpPage />} />

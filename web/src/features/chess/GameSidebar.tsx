@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { capturedPieces, formatMoney, formatClock, type GameSnapshot } from '@shared/contracts';
 import { countryFlag, countryName, formatLocalDateTime } from '@shared/countries';
+import { usePreferences, pieceSrc } from '../../app/ThemeProvider';
 import { useToast } from '../../app/ToastProvider';
 import { ConfirmDialog } from '../../components/Modal';
 import { Icon } from '../../components/Icon';
@@ -41,6 +42,7 @@ export function GameSidebar(props: GameSidebarProps) {
     connected, chat, onResign, onOfferDraw, onAnswerDraw, onClaimDraw, onChat, displayFen, viewerId,
   } = props;
   const toast = useToast();
+  const prefs = usePreferences();
   const viewerLocalTime = formatLocalDateTime(game.startedAt);
   const [confirm, setConfirm] = useState<'resign' | 'claim' | null>(null);
   const [chatText, setChatText] = useState('');
@@ -80,7 +82,7 @@ export function GameSidebar(props: GameSidebarProps) {
           </div>
           <div className="stack" style={{ gap: '.25rem' }}>
             <div className="captured" aria-label={`White captured ${captures.white.length} pieces`}>
-              {captures.white.map((piece, index) => <img key={`${piece}-${index}`} src={`/pieces/${piece}.svg`} alt="" />)}
+              {captures.white.map((piece, index) => <img key={`${piece}-${index}`} src={pieceSrc(prefs.pieceTheme, piece)} alt="" />)}
             </div>
             <div className="player-strip">
               <div className="player-name">
@@ -95,7 +97,7 @@ export function GameSidebar(props: GameSidebarProps) {
               </div>
             </div>
             <div className="captured" aria-label={`Black captured ${captures.black.length} pieces`}>
-              {captures.black.map((piece, index) => <img key={`${piece}-${index}`} src={`/pieces/${piece}.svg`} alt="" />)}
+              {captures.black.map((piece, index) => <img key={`${piece}-${index}`} src={pieceSrc(prefs.pieceTheme, piece)} alt="" />)}
             </div>
           </div>
           <div className="small muted">

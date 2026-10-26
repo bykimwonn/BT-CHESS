@@ -68,13 +68,28 @@ docker run --rm -p 3001:3001 \
 
 ## Hosting start command compatibility
 
-The canonical start command is `npm start`, which runs the compiled ESM entrypoint `dist-server/server/index.js`. Some platforms keep an older dashboard-level start command such as `node server.js` even after the repository changes. The repository therefore ships a thin `server.js` compatibility shim:
+The canonical start command is `npm start`, which runs the compiled ESM entrypoint `dist-server/server/index.js`. Some platforms keep an older dashboard-level start command such as `node server.js` even after the repository changes. The repository therefore ships a thin `server.js` compatibility shim that imports the compiled server into the same process, so health checks, logs and `SIGTERM` handling behave normally.
 
-- it imports the compiled server into the same process, so health checks, logs and `SIGTERM` handling behave normally;
-- if `dist-server/server/index.js` is absent, it runs `npm run build` once (disable with `ROOKSTONE_SKIP_AUTO_BUILD=true`);
-- if the build still cannot be produced, it exits with code 1 and prints the required build/start/Node settings instead of a bare `MODULE_NOT_FOUND` stack trace.
+The shim never builds. Compiling during the start phase takes minutes and makes platform port scanners fail the deploy with `No open ports detected` before the server can bind. Compilation belongs in the build step; if the artifacts are missing the shim exits 1 immediately and prints the required settings:
 
-`npm run test:deploy` executes that exact stale command in production mode against an embedded database, asserts `/api/health` succeeds, asserts clean shutdown, and asserts the missing-build path fails loudly. Do not add application logic to `server.js`; it must stay a compatibility entrypoint only.
+```
+Rookstone Arena cannot start: the compiled server is missing.
+  Build command: npm ci --include=dev && npm run build
+  Start command: npm start   (this file, `node server.js`, also works)
+  Node version:  22.x (verified on 22.22.3)
+```
+
+### Startup order
+
+The server binds `PORT` on `HOST` **first**, typically within a few hundred milliseconds, then runs migrations, clock recovery, settlement recovery and the Stockfish health check. While that happens `/api/health` answers `503 {"status":"starting","ready":false}` so the platform marks the service unreachable rather than "no open ports". Once initialisation finishes the same port serves the full application and `/api/health` returns `{"status":"ok", ...}`.
+
+The process deliberately stays alive when configuration is invalid, keeps the port bound and returns `503` with every problem listed:
+
+```json
+{"status":"error","ready":false,"problems":["SESSION_SECRET must be set to at least 32 random characters ...","DATABASE_URL must point at PostgreSQL ..."]}
+```
+
+Platforms then report a health-check failure (keeping the previous deploy live) with the reason visible in logs and in `curl https://<service>/api/health`, instead of a bare crash loop.
 
 Checklist for any host:
 
@@ -85,13 +100,19 @@ Checklist for any host:
 | Health check path | `/api/health` |
 | Node version | `22.22.3` |
 
+`npm run test:deploy` exercises all of this for real: it runs the stale command in production mode, asserts the port opens in well under the 60-second scan window, asserts health is 200 only when ready, asserts a misconfigured process keeps the port bound and lists every problem, asserts a missing build exits immediately without building, and asserts the runtime pins. Do not add application logic to `server.js`; it must stay a compatibility entrypoint only.
+
 ## Render
 
-`render.yaml` defines a Node web service with `npm ci --include=dev && npm run build`, `npm start`, `NODE_VERSION=22.22.3`, health check `/api/health`, and a managed PostgreSQL database. Set `DATABASE_URL`, `SESSION_SECRET`, `SMTP_URL`, `PUBLIC_ORIGIN`, `CORS_ORIGINS` and `EMAIL_FROM` as secret or explicit environment values in the Render dashboard. Do not use Render's expiring free PostgreSQL for financial data.
+`render.yaml` defines a Node web service with `npm ci --include=dev && npm run build`, `npm start`, `NODE_VERSION=22.22.3`, health check `/api/health`, and a managed PostgreSQL database.
 
-If an existing Render service was created with an older start command, either clear the dashboard override so `render.yaml` applies, or set the start command to `npm start`. Leaving it as `node server.js` also works through the compatibility shim. A bare `Error: Cannot find module '/opt/render/project/src/server.js'` from before this shim was added means the deploy used a checkout that did not contain `server.js`; redeploy from `main` and confirm the build log shows the current commit.
+Required secrets you must set in the Render dashboard: `DATABASE_URL` (from the managed database, or the blueprint's `fromDatabase` reference) and `SESSION_SECRET` (at least 32 random characters, `openssl rand -hex 32`). Optional: `SMTP_URL` and `EMAIL_FROM` for verification/reset email.
 
-Production startup is fail-closed. If the service exits with a configuration error, check the log for the missing setting: `SESSION_SECRET` must be at least 32 characters, and either `DATABASE_URL` must point at PostgreSQL or `ALLOW_EMBEDDED_DB=true` must be set for an intentional single-node PGlite deployment. `PORT` is injected by Render and must not be set manually.
+`PUBLIC_ORIGIN` and `CORS_ORIGINS` are recommended but optional on Render: when unset, the server derives the exact origin from Render's own `RENDER_EXTERNAL_URL`/`RENDER_EXTERNAL_HOSTNAME` variables and logs `publicOriginSource: "platform"`. Set them explicitly if you use a custom domain.
+
+If an existing Render service still runs `node server.js`, either clear the dashboard override so `render.yaml` applies, or leave it — the compatibility shim handles it. A historical `Error: Cannot find module '/opt/render/project/src/server.js'` means the deploy predates the shim; redeploy `main` and confirm the build log shows the current commit.
+
+Production startup is fail-closed: `SESSION_SECRET` must be at least 32 characters and `DATABASE_URL` must point at PostgreSQL (or `ALLOW_EMBEDDED_DB=true` for an intentional single-node PGlite deployment). Missing settings are reported together over `/api/health` and in the logs. `PORT` is injected by Render and must not be set manually. Do not use Render's expiring free PostgreSQL for financial data.
 
 ## Railway
 

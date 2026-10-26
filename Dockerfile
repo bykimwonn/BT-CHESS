@@ -17,6 +17,7 @@ ENV NODE_ENV=production \
     ALLOW_EMBEDDED_DB=false
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/server.js ./server.js
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/dist/web ./dist/web
 COPY --from=build /app/server/db/migrations ./server/db/migrations

@@ -5,7 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { Server as SocketServer } from 'socket.io';
-import { env, assertProductionSafety } from './config/env.js';
+import { env, assertProductionSafety, ConfigurationError } from './config/env.js';
 import { openDatabase } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
 import { createContext } from './services/context.js';
@@ -154,6 +154,16 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('Failed to start Rookstone Arena:', error);
+  if (error instanceof ConfigurationError) {
+    console.error('');
+    console.error('Rookstone Arena cannot start because its production configuration is incomplete.');
+    console.error(error.message);
+    console.error('');
+    console.error('Set these values in the hosting dashboard, then redeploy. See docs/DEPLOYMENT.md.');
+    console.error('Start command must be `npm start` (or the compatibility `node server.js`).');
+    console.error('');
+  } else {
+    console.error('Failed to start Rookstone Arena:', error);
+  }
   process.exit(1);
 });

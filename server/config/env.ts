@@ -12,6 +12,8 @@ const int = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 };
+const publicOriginOverride = (process.env.PUBLIC_ORIGIN ?? '').trim();
+const corsOriginsOverride = (process.env.CORS_ORIGINS ?? '').trim();
 
 export const env = {
   root,
@@ -19,8 +21,9 @@ export const env = {
   isProduction: process.env.NODE_ENV === 'production',
   port: int(process.env.PORT, 3001),
   host: process.env.HOST ?? '0.0.0.0',
-  publicOrigin: process.env.PUBLIC_ORIGIN ?? 'http://localhost:5173',
-  corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()).filter(Boolean),
+  publicOrigin: publicOriginOverride || 'http://localhost:5173',
+  corsOrigins: (corsOriginsOverride || publicOriginOverride || 'http://localhost:5173')
+    .split(',').map((s) => s.trim()).filter(Boolean),
   databaseUrl: process.env.DATABASE_URL ?? '',
   dbDriver: (process.env.DB_DRIVER ?? (process.env.DATABASE_URL ? 'postgres' : 'pglite')) as 'postgres' | 'pglite',
   pgliteDir: process.env.PGLITE_DIR ?? path.join(root, 'data', 'pglite'),
@@ -96,12 +99,35 @@ export const env = {
   },
 };
 
+export class ConfigurationError extends Error {
+  readonly problems: string[];
+
+  constructor(problems: string[]) {
+    super(`Invalid production configuration:\n${problems.map((problem) => `  - ${problem}`).join('\n')}`);
+    this.name = 'ConfigurationError';
+    this.problems = problems;
+  }
+}
+
+/**
+ * Fail-closed startup validation. Every problem is collected so an operator can
+ * fix the whole environment in one pass instead of restarting for each missing
+ * setting. Production must never start with a weak session secret or with an
+ * unintended embedded database.
+ */
 export function assertProductionSafety(): void {
   if (!env.isProduction) return;
+  const problems: string[] = [];
   if (!env.sessionSecret || env.sessionSecret.length < 32) {
-    throw new Error('SESSION_SECRET must be set to at least 32 characters in production');
+    problems.push('SESSION_SECRET must be set to at least 32 random characters (generate with `openssl rand -hex 32`).');
   }
   if (env.dbDriver === 'pglite' && !env.allowEmbeddedInProduction) {
-    throw new Error('Set DATABASE_URL with PostgreSQL or explicitly set ALLOW_EMBEDDED_DB=true for a single-node installation');
+    problems.push('DATABASE_URL must point at PostgreSQL, or ALLOW_EMBEDDED_DB=true must be set explicitly for an intentional single-node installation.');
   }
+  if (!publicOriginOverride) {
+    problems.push('PUBLIC_ORIGIN must be the exact HTTPS origin users open (for example https://chess.example.com).');
+  } else if (!/^https:\/\//i.test(publicOriginOverride) && !/localhost|127\.0\.0\.1/i.test(publicOriginOverride)) {
+    problems.push('PUBLIC_ORIGIN must use https:// in production so session cookies and WebSocket origins are trustworthy.');
+  }
+  if (problems.length) throw new ConfigurationError(problems);
 }

@@ -54,9 +54,15 @@ export class EcoCashAdapter implements PaymentAdapter {
     if (!c.enabled) missing.push('ECOCASH_ENABLED=false');
     if (!this.eipConfigured) missing.push('Instant Payments merchant/API credentials are incomplete');
     if (!this.epgConfigured) missing.push('EPG payout credentials are incomplete (withdrawals unavailable)');
+    // A sandbox URL with production flags (or the reverse) must never be
+    // treated as a real-money channel.
+    const sandboxHost = /sandbox|developers\./i.test(c.eipBaseUrl);
+    if (!c.sandbox && sandboxHost) missing.push(`ECOCASH_EIP_BASE_URL still points at a sandbox host (${c.eipBaseUrl}) while ECOCASH_SANDBOX=false`);
     return {
       id: this.id, name: this.name, configured: this.configured, sandbox: c.sandbox,
-      enabledForRealMoney: this.configured && this.epgConfigured && c.merchantApproved && !c.sandbox,
+      // Either channel can be real-money ready on its own: a deployment may take
+      // deposits through Paynow and pay out only through EcoCash EPG.
+      enabledForRealMoney: (this.eipConfigured || this.epgConfigured) && c.merchantApproved && !c.sandbox && !sandboxHost,
       reason: missing.length ? missing.join('; ') : c.sandbox
         ? 'Sandbox: EcoCash simulates transactions and no real money moves'
         : 'Configured; production endpoints must be issued by EcoCash on go-live',

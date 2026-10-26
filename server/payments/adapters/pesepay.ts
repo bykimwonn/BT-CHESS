@@ -46,6 +46,18 @@ export class PesePayAdapter implements PaymentAdapter {
     return env.providers.pesepay.baseUrl || (env.providers.pesepay.sandbox ? SANDBOX : PRODUCTION);
   }
 
+  /** Sandbox and production must never be mixed up. */
+  private get sandboxHost(): boolean {
+    return /sandbox|(^|[.\-/])test([.\-/]|$)/i.test(this.base);
+  }
+
+  private hostWarning(): string | null {
+    const c = env.providers.pesepay;
+    if (c.sandbox && !this.sandboxHost) return `PESEPAY_SANDBOX=true but PESEPAY_BASE_URL points at ${this.base}, which is not a sandbox host`;
+    if (!c.sandbox && this.sandboxHost) return `PESEPAY_SANDBOX=false but PESEPAY_BASE_URL still points at the sandbox host ${this.base}`;
+    return null;
+  }
+
   private crypto(): PesePayCrypto {
     if (!this.configured) throw new ProviderError('PesePay is not available: enabled flag, integration key or a 32-byte encryption key is missing', 'provider_not_configured', 503);
     return new PesePayCrypto(env.providers.pesepay.encryptionKey);
@@ -58,9 +70,11 @@ export class PesePayAdapter implements PaymentAdapter {
     else if (!c.integrationKey || !c.encryptionKey) reason = 'PESEPAY_INTEGRATION_KEY and PESEPAY_ENCRYPTION_KEY are missing';
     else if (c.encryptionKey.length !== 32) reason = 'PESEPAY_ENCRYPTION_KEY must be exactly 32 characters';
     else if (c.sandbox) reason = 'Sandbox: PesePay test environment, no real money moves';
+    const hostWarning = this.hostWarning();
+    if (hostWarning) reason = `${reason}. Warnings: ${hostWarning}`;
     return {
       id: this.id, name: this.name, configured: this.configured, sandbox: c.sandbox,
-      enabledForRealMoney: this.configured && c.merchantApproved && !c.sandbox, reason,
+      enabledForRealMoney: this.configured && c.merchantApproved && !c.sandbox && !this.sandboxHost, reason,
       capabilities: ['deposit-redirect', 'encrypted-payload', 'server-status-lookup', 'result-callback'],
     };
   }

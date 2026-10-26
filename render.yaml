@@ -30,9 +30,17 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      - key: EMAIL_PROVIDER
+        value: gmail
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
       - key: SMTP_URL
         sync: false
       - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_REPLY_TO
         sync: false
       - key: OPERATING_MODE
         value: free

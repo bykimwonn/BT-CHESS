@@ -30,17 +30,44 @@ export class PaynowAdapter implements PaymentAdapter {
     return env.providers.paynow.enabled && !!env.providers.paynow.id && !!env.providers.paynow.key;
   }
 
+  /** Production Paynow is only reached on its official host. */
+  private get officialProductionHost(): boolean {
+    try {
+      return /^(www\.)?paynow\.co\.zw$/i.test(new URL(env.providers.paynow.baseUrl).host);
+    } catch {
+      return false;
+    }
+  }
+
+  private warnings(): string[] {
+    const c = env.providers.paynow;
+    const warnings: string[] = [];
+    if (c.id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.id)) {
+      warnings.push('PAYNOW_INTEGRATION_ID does not look like the GUID shown in the Paynow dashboard');
+    }
+    if (c.key && (c.key.length < 16 || /\s/.test(c.key))) {
+      warnings.push('PAYNOW_INTEGRATION_KEY looks malformed (no spaces, at least 16 characters)');
+    }
+    if (!c.sandbox && !this.officialProductionHost) {
+      warnings.push(`PAYNOW_BASE_URL (${c.baseUrl}) is not the production Paynow host while PAYNOW_LIVE=true`);
+    }
+    return warnings;
+  }
+
   private reason(): string {
     if (!env.providers.paynow.enabled) return 'PAYNOW_ENABLED=false; enable only after merchant approval';
     if (!env.providers.paynow.id || !env.providers.paynow.key) return 'PAYNOW_INTEGRATION_ID and PAYNOW_INTEGRATION_KEY are missing';
-    return env.providers.paynow.sandbox ? 'Sandbox integration credentials; no live funds can be accepted' : 'Configured';
+    const base = env.providers.paynow.sandbox ? 'Sandbox integration credentials; no live funds can be accepted' : 'Configured';
+    const warnings = this.warnings();
+    return warnings.length ? `${base}. Warnings: ${warnings.join('; ')}` : base;
   }
 
   health(): ProviderHealth {
     return {
       id: this.id, name: this.name, configured: this.configured,
       sandbox: env.providers.paynow.sandbox,
-      enabledForRealMoney: this.configured && env.providers.paynow.merchantApproved && !env.providers.paynow.sandbox,
+      enabledForRealMoney: this.configured && env.providers.paynow.merchantApproved && !env.providers.paynow.sandbox
+        && this.officialProductionHost,
       reason: this.reason(),
       capabilities: ['deposit-redirect', 'signed-status-hash', 'poll-status', 'merchant-trace', 'refund-status'],
     };

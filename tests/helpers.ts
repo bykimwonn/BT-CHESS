@@ -16,6 +16,11 @@ process.env.TEST_FUNDS_ENABLED = 'true';
 process.env.COMPLIANCE_ACTIVATION_PATH = path.join(os.tmpdir(), 'rookstone-no-activation.json');
 process.env.AGE_VERIFICATION_PROVIDER = 'Test18Plus';
 process.env.AGE_VERIFICATION_WEBHOOK_SECRET = 'integration-test-age-verification-secret-0123456789';
+// Tests must never open an SMTP connection or send mail, even when the
+// developer's local .env configures Gmail.
+process.env.EMAIL_PROVIDER = 'none';
+process.env.SMTP_URL = '';
+process.env.SMTP_HOST = '';
 
 const { openDatabase } = await import('../server/db/client.js');
 const { runMigrations } = await import('../server/db/migrate.js');

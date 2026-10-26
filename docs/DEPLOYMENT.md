@@ -47,8 +47,10 @@ SESSION_SECRET=<32+ random bytes>
 PUBLIC_ORIGIN=https://chess.example.com
 CORS_ORIGINS=https://chess.example.com
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/rookstone?sslmode=require
-SMTP_URL=smtps://USER:PASSWORD@smtp.example.com:465
-EMAIL_FROM="Rookstone Arena <no-reply@example.com>"
+EMAIL_PROVIDER=gmail
+SMTP_USER=your.address@gmail.com
+SMTP_PASS=<16-character Google App Password>
+EMAIL_FROM="Rookstone Arena <your.address@gmail.com>"
 OPERATING_MODE=free
 ```
 
@@ -118,7 +120,7 @@ Checklist for any host:
 
 If the dashboard still holds Render's default `npm install`, the deploy now still works: `postinstall` compiles the application during install. The build log will show `[rookstone] Compiling the application during install (npm run build)` followed by `Automatic build complete`. If the log shows `Cannot find module dist-server/server/index.js` and no such lines, the install was run with `--omit=dev`; set the Build Command explicitly.
 
-Required secrets you must set in the Render dashboard: `DATABASE_URL` (from the managed database, or the blueprint's `fromDatabase` reference) and `SESSION_SECRET` (at least 32 random characters, `openssl rand -hex 32`). Optional: `SMTP_URL` and `EMAIL_FROM` for verification/reset email.
+Required secrets you must set in the Render dashboard: `DATABASE_URL` (from the managed database, or the blueprint's `fromDatabase` reference) and `SESSION_SECRET` (at least 32 random characters, `openssl rand -hex 32`). For verification/reset email set `SMTP_USER`, `SMTP_PASS` (a Google App Password) and `EMAIL_FROM` — `render.yaml` already sets `EMAIL_PROVIDER=gmail`. `SMTP_URL` remains available if your provider hands you one DSN. Verify with `npm run email:test -- you@gmail.com` against the deployed environment, or from **Admin → Providers → Email delivery**. See [EMAIL.md](EMAIL.md).
 
 `PUBLIC_ORIGIN` and `CORS_ORIGINS` are recommended but optional on Render: when unset, the server derives the exact origin from Render's own `RENDER_EXTERNAL_URL`/`RENDER_EXTERNAL_HOSTNAME` variables and logs `publicOriginSource: "platform"`. Set them explicitly if you use a custom domain.
 

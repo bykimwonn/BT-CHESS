@@ -30,6 +30,7 @@ export function AdminPage() {
   const [reviewDecision, setReviewDecision] = useState('no action required');
   const [restriction, setRestriction] = useState({ userId: '', type: 'daily_deposit_limit', value: '100', expiresAt: '' });
   const [commission, setCommission] = useState('500');
+  const [testEmailTo, setTestEmailTo] = useState('');
 
   const production = import.meta.env.PROD;
   const mfaReady = mfaEnabled ? mfaCode.length === 6 : !production;
@@ -69,6 +70,7 @@ export function AdminPage() {
   const deposits = useQuery({ queryKey: ['admin', 'deposits', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/deposits'), enabled: mfaReady && tab === 'providers' });
   const withdrawals = useQuery({ queryKey: ['admin', 'withdrawals', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/withdrawals'), enabled: mfaReady && tab === 'providers' });
   const providerEvents = useQuery({ queryKey: ['admin', 'provider-events', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/provider-events'), enabled: mfaReady && tab === 'providers' });
+  const emailStatus = useQuery({ queryKey: ['admin', 'email', mfaReady], queryFn: () => adminApi<Record<string, any>>('/admin/email'), enabled: mfaReady && tab === 'providers' });
   const securityEvents = useQuery({ queryKey: ['admin', 'security-events', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/security-events'), enabled: mfaReady && tab === 'security' });
   const auditLogs = useQuery({ queryKey: ['admin', 'audit-logs', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/audit-logs'), enabled: mfaReady && tab === 'security' });
   const adminActions = useQuery({ queryKey: ['admin', 'actions', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/actions'), enabled: mfaReady && tab === 'security' });
@@ -79,6 +81,23 @@ export function AdminPage() {
   const exchangeRates = useQuery({ queryKey: ['admin', 'rates', mfaReady], queryFn: () => adminApi<{ items: Array<Record<string, any>> }>('/admin/currencies/rates'), enabled: mfaReady && tab === 'compliance' });
   const [policy, setPolicy] = useState({ code: 'ZW', label: 'Zimbabwe', freePlayAllowed: true, realMoneyAllowed: false, types: 'free', providers: '', reason: '' });
   const [rate, setRate] = useState({ fromCurrency: 'USD', toCurrency: 'EUR', rate: '0.92', effectiveAt: new Date().toISOString(), source: 'ECB reference', evidenceRef: '' });
+
+  const sendTestEmail = async () => {
+    if (!mfaReady) { toast.error('MFA code required', 'Enter the six-digit administrator code before sending mail.'); return; }
+    if (!confirmed || reason.trim().length < 8) { toast.error('Confirmation required', 'Tick the confirmation box and provide a documented reason of at least 8 characters.'); return; }
+    if (!testEmailTo.trim()) { toast.error('Recipient required', 'Enter the mailbox that should receive the test message.'); return; }
+    setBusy(true);
+    try {
+      const result = await adminApi<{ delivered: boolean; reason?: string; messageId?: string }>('/admin/email/test', {
+        method: 'POST', body: { to: testEmailTo.trim(), confirm: true, reason },
+      });
+      if (result.delivered) toast.success('Test email accepted', `The SMTP server accepted the message ${result.messageId ?? ''} for ${testEmailTo.trim()}. Check the inbox and the spam folder.`);
+      else toast.error('Test email not delivered', result.reason ?? 'The SMTP server rejected the message.');
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'email'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'system'] });
+    } catch (error) { toast.error('Test email failed', errorMessage(error)); }
+    finally { setBusy(false); }
+  };
 
   const inspect = async (id: string) => {
     if (!mfaReady) { toast.error('MFA code required'); return; }
@@ -171,6 +190,28 @@ export function AdminPage() {
       </div>}
 
       {mfaReady && tab === 'providers' && <div className="split"><div className="stack">
+        <section className="card">
+          <div className="card-header">
+            <div><h2 className="card-title">Email delivery</h2>
+              <p className="card-subtitle">Verification and password-reset mail is sent by the server. Nothing is reported as delivered unless the SMTP server accepted it.</p></div>
+            <span className={`pill ${emailStatus.data?.configured ? 'pill-success' : 'pill-danger'}`}>{emailStatus.data?.configured ? 'Configured' : 'Not configured'}</span>
+          </div>
+          {emailStatus.isLoading && <div className="card"><span className="loading" /> Reading mail configuration…</div>}
+          {emailStatus.error && <ErrorState message={errorMessage(emailStatus.error)} retry={() => void emailStatus.refetch()} />}
+          {emailStatus.data && <div className="stack">
+            <div className="small mono">{String(emailStatus.data.provider)} · {String(emailStatus.data.host || 'SMTP_URL')}:{String(emailStatus.data.port)} · {emailStatus.data.secure ? 'TLS' : 'STARTTLS'}</div>
+            <div className="small">From <strong>{String(emailStatus.data.from)}</strong>{emailStatus.data.user ? ` · authenticated as ${String(emailStatus.data.user)}` : ''}</div>
+            {Array.isArray(emailStatus.data.problems) && emailStatus.data.problems.length > 0 && <div className="alert alert-danger"><strong>Configuration problems.</strong><ul className="small">{emailStatus.data.problems.map((problem: string) => <li key={problem}>{problem}</li>)}</ul></div>}
+            {emailStatus.data.lastError && <div className="alert alert-warning small"><strong>Last failure.</strong> {String(emailStatus.data.lastError)}</div>}
+            {emailStatus.data.lastSuccessAt && <div className="tiny muted">Last accepted by the SMTP server: {new Date(String(emailStatus.data.lastSuccessAt)).toLocaleString()}</div>}
+            <div className="row-wrap">
+              <label className="field grow" style={{ minWidth: 220 }}><span className="field-label">Send a real test message to</span>
+                <input className="input" type="email" value={testEmailTo} onChange={(e) => setTestEmailTo(e.target.value)} placeholder="you@gmail.com" /></label>
+              <button className="btn btn-sm" style={{ marginTop: '1.2rem' }} disabled={busy || !confirmed || reason.trim().length < 8} onClick={() => void sendTestEmail()}>Send test email</button>
+            </div>
+            <p className="tiny muted">Uses the MFA code, confirmation and reason above. Run <code>npm run email:test -- address</code> on the server for the same check from the command line.</p>
+          </div>}
+        </section>
         <section className="card"><h2 className="card-title">Deposits</h2><div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Provider</th><th>Amount</th><th>Status</th><th>Sandbox</th><th>Reference</th></tr></thead><tbody>{deposits.data?.items.map((row) => <tr key={String(row.id)}><td>{String(row.username)}</td><td>{String(row.provider)}</td><td>{formatMoney(Number(row.amount_cents))}</td><td>{String(row.status)}</td><td>{row.sandbox ? 'yes' : 'no'}</td><td className="mono tiny">{String(row.provider_reference ?? '—')}</td></tr>)}</tbody></table></div></section>
         <section className="card"><h2 className="card-title">Withdrawals</h2><div className="table-wrap"><table className="table"><thead><tr><th>User</th><th>Provider</th><th>Amount</th><th>Status</th><th>Destination</th></tr></thead><tbody>{withdrawals.data?.items.map((row) => <tr key={String(row.id)}><td>{String(row.username)}</td><td>{String(row.provider)}</td><td>{formatMoney(Number(row.amount_cents))}</td><td>{String(row.status)}</td><td>{String(row.destination)}</td></tr>)}</tbody></table></div></section>
         <section className="card"><h2 className="card-title">Provider events</h2><div className="table-wrap" style={{ maxHeight: 300, overflowY: 'auto' }}><table className="table"><thead><tr><th>Received</th><th>Provider</th><th>Signature</th><th>Event</th><th>Processed</th></tr></thead><tbody>{providerEvents.data?.items.map((row) => <tr key={String(row.id)}><td>{new Date(String(row.received_at)).toLocaleString()}</td><td>{String(row.provider)}</td><td>{row.signature_valid ? 'valid' : 'invalid'}</td><td className="mono tiny">{String(row.event_id).slice(0, 30)}</td><td>{row.processed_at ? 'yes' : 'no'}</td></tr>)}</tbody></table></div></section>

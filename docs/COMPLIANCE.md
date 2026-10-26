@@ -32,6 +32,8 @@ Obtain and record:
 
 ## Activation manifest
 
+`npm run compliance:draft` builds `config/compliance-activation.draft.json` from the `COMPLIANCE_*` variables and refuses placeholders. `npm run preflight` reports every outstanding blocker. The manual path is:
+
 1. Copy the template:
 
 ```bash

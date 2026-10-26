@@ -29,6 +29,49 @@ export type PublicOriginSource = 'explicit' | 'platform' | 'default';
 const publicOriginSource: PublicOriginSource =
   publicOriginOverride ? 'explicit' : platformOrigin ? 'platform' : 'default';
 
+// ---------------------------------------------------------------- email
+// Three supported shapes, in priority order:
+//   1. SMTP_URL              full connection string (kept for compatibility)
+//   2. EMAIL_PROVIDER=gmail  smtp.gmail.com with an App Password
+//   3. SMTP_HOST/PORT/...    any other SMTP server
+const emailProviderRaw = (process.env.EMAIL_PROVIDER ?? '').trim().toLowerCase();
+const emailProvider: EmailProvider =
+  emailProviderRaw === 'gmail' || emailProviderRaw === 'smtp' || emailProviderRaw === 'none'
+    ? emailProviderRaw
+    : process.env.SMTP_URL ? 'smtp'
+      : process.env.SMTP_HOST ? 'smtp'
+        : process.env.GMAIL_USER || process.env.SMTP_USER ? 'gmail'
+          : 'none';
+const smtpHost = (process.env.SMTP_HOST ?? (emailProvider === 'gmail' ? 'smtp.gmail.com' : '')).trim();
+const smtpPort = int(process.env.SMTP_PORT, emailProvider === 'gmail' ? 465 : 587);
+const smtpSecure = process.env.SMTP_SECURE === undefined
+  ? smtpPort === 465
+  : bool(process.env.SMTP_SECURE);
+const smtpUser = (process.env.SMTP_USER ?? process.env.GMAIL_USER ?? '').trim();
+// Gmail requires a 16-character App Password; the normal account password is
+// rejected by Google even when it is correct.
+const smtpPass = process.env.SMTP_PASS ?? process.env.GMAIL_APP_PASSWORD ?? '';
+const emailFromExplicit = (process.env.EMAIL_FROM ?? '').trim();
+const emailFrom = emailFromExplicit
+  || (smtpUser ? `Rookstone Arena <${smtpUser}>` : 'Rookstone Arena <no-reply@example.invalid>');
+const emailReplyTo = (process.env.EMAIL_REPLY_TO ?? '').trim();
+
+export type EmailProvider = 'gmail' | 'smtp' | 'none';
+
+export interface EmailSettings {
+  provider: EmailProvider;
+  smtpUrl: string;
+  host: string;
+  port: number;
+  secure: boolean;
+  requireTls: boolean;
+  user: string;
+  pass: string;
+  from: string;
+  fromExplicit: boolean;
+  replyTo: string;
+}
+
 export const env = {
   root,
   nodeEnv: process.env.NODE_ENV ?? 'development',
@@ -47,7 +90,20 @@ export const env = {
   sessionTtlHours: int(process.env.SESSION_TTL_HOURS, 24 * 14),
   trustProxy: int(process.env.TRUST_PROXY, 0),
   smtpUrl: process.env.SMTP_URL ?? '',
-  emailFrom: process.env.EMAIL_FROM ?? 'Rookstone Arena <no-reply@example.invalid>',
+  emailFrom,
+  email: {
+    provider: emailProvider,
+    smtpUrl: (process.env.SMTP_URL ?? '').trim(),
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    requireTls: bool(process.env.SMTP_REQUIRE_TLS),
+    user: smtpUser,
+    pass: smtpPass,
+    from: emailFrom,
+    fromExplicit: !!emailFromExplicit,
+    replyTo: emailReplyTo,
+  } satisfies EmailSettings,
   logLevel: process.env.LOG_LEVEL ?? 'info',
   operatingMode: (process.env.OPERATING_MODE ?? 'free') as 'free' | 'test' | 'real',
   legalAuthorisationVerified: bool(process.env.LEGAL_AUTHORISATION_VERIFIED),

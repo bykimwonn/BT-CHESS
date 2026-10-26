@@ -1,4 +1,5 @@
 import type { ComplianceState } from '../config/compliance.js';
+import { env } from '../config/env.js';
 import type { Database, Queryable, Row } from '../db/client.js';
 import type { AppLogger } from '../services/logger.js';
 import { adminAction, audit } from '../services/audit.js';
@@ -12,6 +13,8 @@ import { SYSTEM_ACCOUNTS } from '../finance/ledger.js';
 import type { SettlementService, SettlementGameRow } from '../finance/settlement.js';
 import type { PaymentService } from '../payments/service.js';
 import type { EngineService } from '../engine/service.js';
+import type { Mailer, MailStatus } from '../services/mailer.js';
+import { testEmail } from '../services/email-templates.js';
 import type { AnalysisService } from '../engine/analysis.js';
 import type { CompetitionTerms, GameResult } from '../../shared/contracts.js';
 
@@ -32,6 +35,7 @@ export class AdminService {
     private readonly payments: PaymentService,
     private readonly engine: EngineService,
     private readonly analysis: AnalysisService,
+    private readonly mailer: Mailer,
     private readonly log: AppLogger,
   ) {}
 
@@ -386,6 +390,31 @@ export class AdminService {
     return id;
   }
 
+  async emailStatus(): Promise<MailStatus & { environment: string; publicOrigin: string }> {
+    return {
+      ...this.mailer.status(),
+      environment: this.compliance.testMode ? 'test' : this.compliance.realMoneyEnabled ? 'real' : 'free',
+      publicOrigin: env.publicOrigin,
+    };
+  }
+
+  /**
+   * Send a real test message through the configured transport. The result is
+   * audited even when delivery fails, and the failure is returned to the
+   * operator instead of claiming success.
+   */
+  async sendTestEmail(actorId: string, to: string, reason: string): Promise<{ delivered: boolean; reason?: string; messageId?: string }> {
+    const delivery = await this.mailer.sendContent(to, testEmail(new Date().toISOString(), env.nodeEnv));
+    await this.db.transaction(async (tx) => {
+      await adminAction(tx, {
+        actorId, action: 'email.test', targetType: 'email', targetId: maskEmail(to),
+        reason, outcome: delivery.delivered ? 'delivered' : `failed: ${delivery.reason ?? 'unknown'}`,
+        metadata: { provider: env.email.provider, host: env.email.host, delivered: delivery.delivered },
+      });
+    });
+    return delivery;
+  }
+
   async complianceStatus(): Promise<Record<string, unknown>> {
     return {
       ...this.compliance,
@@ -408,6 +437,7 @@ export class AdminService {
       status: reconciliation.discrepancies.length === 0 && reconciliation.unbalancedTransactions.length === 0 ? 'healthy' : 'degraded',
       database: { driver: this.db.driver, time: dbResult.rows[0]?.server_time, version: dbResult.rows[0]?.postgres_version },
       engine,
+      email: this.mailer.status(),
       reconciliation,
       uptimeSeconds: Math.round(process.uptime()),
       memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),

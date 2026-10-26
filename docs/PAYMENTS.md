@@ -1,5 +1,7 @@
 # Payment provider interfaces
 
+Provider onboarding, merchant-approval evidence and real-mode activation are covered in [GO-LIVE.md](GO-LIVE.md). This page documents the adapter contracts.
+
 All money is integer USD cents. Provider adapters are server-side only; browser code never receives integration keys, encryption keys, merchant PINs or webhook secrets. No customer mobile-money PIN is collected or stored. `ECOCASH_MERCHANT_API_PIN` is a merchant API credential issued by the provider, not a customer PIN.
 
 Official documentation used during implementation:
@@ -20,6 +22,7 @@ Official documentation used during implementation:
 8. Sandbox results post `test_deposit_credit` journals labelled as having no cash value.
 9. Failed withdrawals release the reservation with a compensating journal.
 10. Withdrawals are disabled unless authorised real-money mode is active.
+11. A real-money deployment needs at least one provider with a `merchant-payout` capability; deposits without a payout path are refused by `npm run preflight`.
 
 ## Paynow
 
@@ -28,6 +31,7 @@ Official documentation used during implementation:
 - Status update: Paynow posts a URL-encoded body. The adapter validates the SHA-512 hash computed from URL-decoded values in message order plus the integration key.
 - Server verification: empty `POST` to the stored `pollurl`, or `POST /interface/trace` with `merchanttrace`. Only `Paid`, `Awaiting Delivery` or `Delivered` are treated as paid; `Refunded` triggers reversal; `Disputed` remains pending.
 - Payouts: not implemented because Paynow does not publish a merchant payout API for this integration. Use an approved payout provider.
+- Production is pinned to the official Paynow host: when `PAYNOW_LIVE=true` but `PAYNOW_BASE_URL` points somewhere else, the adapter reports a warning and refuses to mark the provider as real-money ready.
 - Test coverage: the unit test reproduces the exact hashes from Paynow's official documentation.
 
 ## EcoCash
@@ -46,7 +50,7 @@ Two distinct EcoCash APIs are used:
 - Encryption key must be exactly 32 characters; the IV is the first 16 characters, as documented. The adapter decrypts the response payload and stores `referenceNumber`, `redirectUrl` and `pollUrl`.
 - Result callback: PesePay sends plain JSON with the integration key in `Authorization`. The adapter rejects a mismatched header, then ignores the callback's status and calls Check Payment Status.
 - Check Payment Status: `GET /payments-engine/v1/payments/check-payment?referenceNumber=...`, decrypt the response payload and compare `amountDetails.amount`/`currencyCode` with the pending deposit.
-- Sandbox and production base URLs are distinct. Do not point production at the sandbox.
+- Sandbox and production base URLs are distinct. Do not point production at the sandbox: a mismatched `PESEPAY_SANDBOX`/`PESEPAY_BASE_URL` combination is reported and refuses real-money readiness.
 - Payouts: not implemented because no supported merchant payout endpoint is documented for this integration.
 
 ## OneMoney

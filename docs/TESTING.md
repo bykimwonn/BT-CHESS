@@ -27,17 +27,17 @@ npm run test:deploy
 
 | Suite | Runner / result | Count |
 | --- | --- | --- |
-| Unit | `tsx --test tests/unit/*.test.ts` — 70 pass, 0 fail | 70 tests |
+| Unit | `tsx --test tests/unit/*.test.ts` — 78 pass, 0 fail | 78 tests |
 | Integration | `tsx --test tests/integration/*.test.ts` — 27 pass, 0 fail | 27 tests |
-| UI | `vitest run --config vitest.config.ts` — 6 files, 16 pass, 0 fail | 16 tests |
+| UI | `vitest run --config vitest.config.ts` — 7 files, 21 pass, 0 fail | 21 tests |
 | Server E2E | `tsx tests/e2e.ts` — `ok: true` | 21 checks |
-| Browser | real Chromium + production bundle — `ok: true` | 43 checks |
+| Browser | real Chromium + production bundle — `ok: true` | 47 checks |
 | Deployment | `node tests/deploy-entrypoint.mjs` — passes | 8 checks |
 | Typecheck | `tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json` | 0 errors |
 | Production build | TypeScript server + Vite web bundle | 0 errors |
 | Clean install | `npm ci` in a fresh copy of the repository | exit 0; postinstall vendored GPL Stockfish assets |
 
-Combined: **113 automated test cases**, **72 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
+Combined: **126 automated test cases**, **76 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
 
 The deployment suite runs the exact stale host command `node server.js` against the compiled server and asserts the port opens in well under the 60-second platform scan window (observed: 362 ms bound, 3.1 s ready), that `/api/health` is 200 only when ready and reports its database driver, and that `SIGTERM` shuts down cleanly. It asserts incomplete production configuration keeps the port bound and returns 503 listing every missing setting instead of crash-looping, that `RENDER_EXTERNAL_URL` supplies the public origin when `PUBLIC_ORIGIN` is unset, that a missing build exits 1 with actionable guidance and performs no runtime build, that the install-phase build exists, is idempotent, can be skipped, never breaks a production-only install and is copied into Docker's dependency layer; and that `engines`, `.node-version`, `render.yaml` and `start` stay pinned to the verified runtime.
 
@@ -54,6 +54,7 @@ The deployment suite runs the exact stale host command `node server.js` against 
 - Settlement journal lines for winner, draw and void; tampered terms rejected.
 - Compliance activation signature and manifest verification, including independent flags.
 - Cash-voucher code normalisation, look-alike-free generation, hash-only storage and the fail-closed rail gate (`CASH_AGENTS_ENABLED`, free/test/real, payout-only-in-real).
+- Practice ladder: monotonic strength, UCI move parsing, seeded random-move selection, white-perspective evaluation conversion and bar clamping.
 - International country/timezone helpers, explicit currency formatting and deterministic tournament pairing.
 
 ### Integration
@@ -81,6 +82,7 @@ The deployment suite runs the exact stale host command `node server.js` against 
 - Registration form shows the specific rule inline (`Include an uppercase letter`), marks the input `aria-invalid`, keeps the form usable, and makes **no** network request for a fixable mistake. Also asserts mobile keyboards get `autocapitalize="none"`, `autocorrect="off"` and `inputmode="email"` so credentials are not silently mangled.
 
 - Keyboard algebraic move input and promotion picker on the real `react-chessboard` component.
+- Board appearance: chess.com-style palette/piece lists, legacy preference migration (`forest`→`green`, `classic`→`chesscom`), every rendered piece served from `/pieces/wX.svg`, and the promotion picker using the selected piece set.
 - A mocked UCI Web Worker verifies the browser Stockfish handshake, `bestmove` parsing and worker shutdown.
 - Theme persistence/toggle, board preference updates, accessible modal/Escape behaviour, explicit confirmation dialogs, and exact quote disclosure.
 

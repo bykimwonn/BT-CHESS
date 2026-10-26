@@ -329,8 +329,40 @@ async function run() {
     check(`genuine Stockfish UCI analysis produced a real best move (${browserWorkerResult ? 'browser worker' : 'server fallback'})`,
       /Stockfish 19 Lite WASM/i.test(engineText), { engineText, browserWorkerResult });
 
+    // Practice board: a real browser worker plays one move against the level
+    // ladder and the move list must show both sides' moves.
+    await whitePage.goto(`${base}/train`, { waitUntil: 'domcontentloaded' });
+    await whitePage.getByRole('button', { name: /Start practice/i }).click();
+    await whitePage.waitForTimeout(400);
+    const boardBox = await whitePage.locator('.board-container').boundingBox();
+    if (!boardBox) throw new Error('practice board did not render');
+    const squarePoint = (file, rank) => ({
+      x: boardBox.x + (file + 0.5) * (boardBox.width / 8),
+      y: boardBox.y + (rank + 0.5) * (boardBox.height / 8),
+    });
+    const from = squarePoint(4, 6); // e2
+    const to = squarePoint(4, 4); // e4
+    await whitePage.mouse.move(from.x, from.y);
+    await whitePage.mouse.down();
+    await whitePage.mouse.move(to.x, to.y, { steps: 10 });
+    await whitePage.mouse.up();
+    await whitePage.waitForFunction(
+      () => document.querySelectorAll('.train-moves li').length >= 2,
+      null,
+      { timeout: 30_000 },
+    );
+    const practiceMoves = await whitePage.locator('.train-moves li').allInnerTexts();
+    check('practice board: player move accepted and the Stockfish worker replied',
+      practiceMoves.some((text) => /e4/.test(text)) && practiceMoves.length >= 2, practiceMoves);
+    const evalValue = await whitePage.locator('.eval-number').innerText();
+    check('practice board: evaluation bar shows a real engine score', /^([+-]\d+\.\d\d|M\d+)$/.test(evalValue.trim()), evalValue);
+    const pieceSources = await whitePage.locator('.board-container img').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('src')));
+    check('board renders the vendored Staunton piece set',
+      pieceSources.length >= 32 && pieceSources.every((src) => /^\/pieces\/[wb][KQRBNP]\.svg$/.test(src)),
+      pieceSources.slice(0, 4));
+
     await pageA.setViewportSize({ width: 390, height: 844 });
-    for (const route of ['/', '/play', '/competitions', '/tournaments', '/puzzles', '/learn', '/analysis', '/leaderboard', '/wallet', '/settings', '/history', '/help', '/legal']) {
+    for (const route of ['/', '/play', '/competitions', '/tournaments', '/puzzles', '/learn', '/train', '/analysis', '/leaderboard', '/wallet', '/settings', '/history', '/help', '/legal']) {
       await pageA.goto(`${base}${route}`, { waitUntil: 'domcontentloaded' });
       const size = await overflow(pageA);
       check(`no horizontal overflow at 390px on ${route}`, size.scrollWidth <= size.innerWidth + 1, size);

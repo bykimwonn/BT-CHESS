@@ -73,7 +73,12 @@ Socket.IO authenticates each handshake with the same session cookie as HTTP and 
 
 ## Engine
 
-Both browser and server use the same Stockfish 19 Lite WASM distribution. The browser creates a classic Web Worker from `/engine/stockfish-19-lite-single.js`; the Node service spawns the same UCI engine file as a child process. Both perform a real `uci`/`isready` handshake, parse `info`/`bestmove` output, support cancellation and never fabricate an evaluation or best move.
+Both browser and server use the same Stockfish 19 Lite WASM distribution. The
+browser uses it twice: the analysis board (full strength, MultiPV) and the
+practice board (`web/src/features/engine/levels.ts`), which sets the UCI `Skill
+Level` option plus a depth/think-time budget and, at the three lowest levels, a
+seeded chance of a random legal move so the opponent is beatable. Practice state
+lives only in the component; nothing is sent to the server. The browser creates a classic Web Worker from `/engine/stockfish-19-lite-single.js`; the Node service spawns the same UCI engine file as a child process. Both perform a real `uci`/`isready` handshake, parse `info`/`bestmove` output, support cancellation and never fabricate an evaluation or best move.
 
 ## Compliance gating
 

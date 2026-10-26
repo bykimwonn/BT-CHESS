@@ -1,8 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 export type ThemeName = 'dark' | 'light';
-export type BoardTheme = 'forest' | 'slate' | 'walnut';
-export type PieceTheme = 'classic' | 'meridian' | 'staunton';
+/** Chess.com-style square palettes: green, brown and blue. */
+export type BoardTheme = 'green' | 'brown' | 'blue';
+/** `chesscom` is the Colin M. L. Burnett set; `staunton` is react-chessboard's own vectors. */
+export type PieceTheme = 'chesscom' | 'meridian' | 'staunton';
+
+export const BOARD_THEMES: Array<{ id: BoardTheme; label: string }> = [
+  { id: 'green', label: 'Green' },
+  { id: 'brown', label: 'Brown' },
+  { id: 'blue', label: 'Blue' },
+];
+export const PIECE_THEMES: Array<{ id: PieceTheme; label: string }> = [
+  { id: 'chesscom', label: 'Classic Staunton' },
+  { id: 'meridian', label: 'High contrast' },
+  { id: 'staunton', label: 'Vector outline' },
+];
+
+// Older builds stored different ids; keep those preferences working.
+const LEGACY_BOARD: Record<string, BoardTheme> = { forest: 'green', walnut: 'brown', slate: 'blue' };
+const LEGACY_PIECES: Record<string, PieceTheme> = { classic: 'chesscom' };
 
 interface Preferences {
   theme: ThemeName;
@@ -21,20 +38,45 @@ interface Preferences {
 const STORAGE_KEY = 'rookstone.preferences.v1';
 const defaults = {
   theme: 'dark' as ThemeName,
-  boardTheme: 'forest' as BoardTheme,
-  pieceTheme: 'classic' as PieceTheme,
+  boardTheme: 'green' as BoardTheme,
+  pieceTheme: 'chesscom' as PieceTheme,
   showCoordinates: true,
   showLegalMoves: true,
   animations: true,
   sound: false,
 };
 
+const BOARD_IDS = new Set<string>(BOARD_THEMES.map((entry) => entry.id));
+const PIECE_IDS = new Set<string>(PIECE_THEMES.map((entry) => entry.id));
+
+export function resolveBoardTheme(value: unknown): BoardTheme {
+  if (typeof value === 'string') {
+    if (BOARD_IDS.has(value)) return value as BoardTheme;
+    if (LEGACY_BOARD[value]) return LEGACY_BOARD[value];
+  }
+  return defaults.boardTheme;
+}
+
+export function resolvePieceTheme(value: unknown): PieceTheme {
+  if (typeof value === 'string') {
+    if (PIECE_IDS.has(value)) return value as PieceTheme;
+    if (LEGACY_PIECES[value]) return LEGACY_PIECES[value];
+  }
+  return defaults.pieceTheme;
+}
+
 function load(): typeof defaults {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<typeof defaults>;
     const theme = stored.theme === 'light' || stored.theme === 'dark' ? stored.theme
       : window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-    return { ...defaults, ...stored, theme };
+    return {
+      ...defaults,
+      ...stored,
+      theme,
+      boardTheme: resolveBoardTheme(stored.boardTheme),
+      pieceTheme: resolvePieceTheme(stored.pieceTheme),
+    };
   } catch { return defaults; }
 }
 

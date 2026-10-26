@@ -4,7 +4,7 @@ import { Chess, type Square } from 'chess.js';
 import type { Arrow } from 'react-chessboard';
 import { ChessBoard } from '../features/chess/ChessBoard';
 import { EnginePanel, type EngineResultView } from '../features/engine/EnginePanel';
-import { usePreferences } from '../app/ThemeProvider';
+import { BOARD_THEMES, PIECE_THEMES, usePreferences } from '../app/ThemeProvider';
 import { useToast } from '../app/ToastProvider';
 import { PageHeader } from '../components/PageHeader';
 import { Icon } from '../components/Icon';
@@ -195,11 +195,11 @@ export function AnalysisPage() {
               <label className="checkbox"><input type="checkbox" checked={prefs.animations && !prefs.reducedMotion} disabled={prefs.reducedMotion} onChange={(e) => prefs.set('animations', e.target.checked)} /> Piece animations {prefs.reducedMotion && <span className="tiny muted">(reduced motion active)</span>}</label>
               <label className="field"><span className="field-label">Board theme</span>
                 <select className="select" value={prefs.boardTheme} onChange={(e) => prefs.set('boardTheme', e.target.value as typeof prefs.boardTheme)}>
-                  <option value="forest">Forest</option><option value="slate">Slate</option><option value="walnut">Walnut</option>
+                  {BOARD_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}
                 </select></label>
               <label className="field"><span className="field-label">Piece theme</span>
                 <select className="select" value={prefs.pieceTheme} onChange={(e) => prefs.set('pieceTheme', e.target.value as typeof prefs.pieceTheme)}>
-                  <option value="classic">Classic original SVG</option><option value="meridian">Meridian tinted SVG</option><option value="staunton">Staunton vector</option>
+                  {PIECE_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}
                 </select></label>
             </div>
           </section>

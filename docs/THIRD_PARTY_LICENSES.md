@@ -15,7 +15,13 @@ GPL obligations: if you distribute the browser bundle or container image contain
 
 ## Chess piece SVGs
 
-`web/public/pieces/*.svg` are original Staunton-inspired silhouettes hand-authored in `scripts/make-pieces.mjs` for this project. They are part of the original application assets. The default vector piece set provided by `react-chessboard` is MIT-licensed.
+`web/public/pieces/*.svg` are the **Colin M. L. Burnett** chess set (the set used by Lichess and visually the familiar "chess.com" Staunton look), vendored unchanged into the repository so the application never fetches art from a CDN at runtime.
+
+- Author: Colin M. L. Burnett.
+- Source: [lichess-org/lila `public/piece/cburnett`](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett) (mirrors Wikimedia Commons `Chess_*t45.svg`).
+- Licence: triple-licensed **GPL-2.0-or-later / BSD-3-Clause / CC-BY-SA-3.0**. This project uses the **BSD-3-Clause** option; the artwork itself is not relicensed as MIT.
+- Attribution and per-file notes: `web/public/pieces/ATTRIBUTION.md`.
+- The alternative vector set is the default provided by the MIT-licensed `react-chessboard` package.
 
 ## Other dependencies
 

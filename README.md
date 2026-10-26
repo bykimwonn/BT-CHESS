@@ -15,6 +15,8 @@ Rookstone Arena is a production-oriented online chess competition application bu
 - Paynow, EcoCash and PesePay server adapters based on published documentation; signed/hash-verified callbacks, server-to-server status checks, sandbox/production separation, explicit disabled OneMoney adapter; no fake deposits or redirect-based success.
 - Secure auth: Argon2id, rotating sessions, CSRF, rate limits, optional TOTP MFA, RBAC, MFA/confirmation for privileged actions, email verification, password recovery, session revocation, security/audit logs.
 - Genuine GPL-3.0 Stockfish 19 Lite WASM UCI engine in browser and Node, with health checks, cancellation, concurrency limits, move-quality summaries and human-review-only fair-play signals.
+- **Practice board**: play the same Stockfish build at eight strengths (Skill Level, depth, think time and deliberate blunders at the lowest levels), with takeback, hints, a move review and PGN export. Practice is unrated, unstaked and never sent to the server.
+- **Board and pieces**: chess.com-style green/brown/blue square palettes with highlighted last move, legal-move dots, capture rings, check glow and matching promotion picker, using the vendored Colin M. L. Burnett Staunton piece set (BSD-3-Clause) that Lichess also ships.
 - Free international tournaments with real entrants, deterministic Swiss-style pairing, standings and no financial transactions.
 - Voluntary country flags, IANA timezone preferences, UTC storage/local-time display, jurisdiction policies, signed age/identity/location verification integration, account-currency separation and explicit multi-currency rate/quote design.
 - Puzzles, lessons, leaderboard, profiles, history, settings, help, legal policies, notifications, disputes, responsible-play controls and a full admin dashboard.
@@ -80,7 +82,7 @@ npm run email:test -- you@gmail.com
 | --- | --- | --- |
 | Unit | `npm run test:unit` | money math, chess rules, country/timezone helpers, tournament pairing, Paynow hashes, TOTP, PesePay crypto, settlement math, compliance signing, email transport/preflight rules |
 | Integration | `npm run test:integration` | migrations, ledger/currency invariants, auth/CSRF/RBAC/MFA, games, clocks, settlement, disputes, jurisdiction policies, payment failures, tournaments, terms |
-| UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, theme, dialogs, quote disclosure |
+| UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, board/piece themes, dialogs, quote disclosure |
 | Server E2E | `npm run test:e2e` | two authenticated Socket.IO clients, duplicate/stale moves, PGN, ratings, wallet, persistence across restart |
 | Browser | `npm run test:browser` | real npm-packaged Chromium: free/money mode choice, two users in different timezones, private invitations, reconnection, engine WASM, RBAC, wallet, mobile overflow, restart |
 | Deployment | `npm run test:deploy` | port bound inside the platform scan window, stale `node server.js` command, health gating, clean shutdown, missing-build guidance, fail-closed configuration, platform origin, install-phase build guards, pinned Node runtime |
@@ -93,10 +95,10 @@ The browser suite builds the production bundle, starts the compiled server with 
 web/                    React 19 + Vite + TypeScript client
   src/app/              providers, router, layout
   src/features/chess/   board, game state, sidebar, clocks, replay
-  src/features/engine/  browser Stockfish UCI worker hook and panel
-  src/pages/            landing, play, competitions, game, puzzles, learn, analysis, wallet, admin, legal…
+  src/features/engine/  browser Stockfish UCI worker hook, analysis panel and practice levels
+  src/pages/            landing, play, competitions, game, puzzles, learn, train, analysis, wallet, admin, legal…
   public/engine/        vendored GPL-3.0 Stockfish 19 lite-single WASM distribution
-  public/pieces/        original hand-authored chess piece SVGs
+  public/pieces/        vendored Colin M. L. Burnett Staunton piece set (BSD-3-Clause)
 server/                 Express 4 + Socket.IO authoritative API
   db/migrations/        versioned PostgreSQL schema
   auth/                 sessions, Argon2id, TOTP, CSRF, password recovery

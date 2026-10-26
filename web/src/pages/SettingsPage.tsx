@@ -6,7 +6,7 @@ import { browserTimeZone, countryOptions, formatLocalDateTime, isValidTimeZone }
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../app/AuthProvider';
 import { useToast } from '../app/ToastProvider';
-import { usePreferences } from '../app/ThemeProvider';
+import { BOARD_THEMES, PIECE_THEMES, usePreferences } from '../app/ThemeProvider';
 import { PageHeader } from '../components/PageHeader';
 import { ProviderHealthCard } from '../components/Competition';
 import { ConfirmDialog } from '../components/Modal';
@@ -197,8 +197,8 @@ export function SettingsPage() {
         <section className="card"><h2 className="card-title">Appearance</h2><div className="stack">
           <div className="row-wrap"><button className="btn" aria-pressed={prefs.theme === 'dark'} onClick={() => prefs.setTheme('dark')}><Icon name="moon" size={16} /> Dark</button>
             <button className="btn" aria-pressed={prefs.theme === 'light'} onClick={() => prefs.setTheme('light')}><Icon name="sun" size={16} /> Light</button></div>
-          <label className="field"><span className="field-label">Board theme</span><select className="select" value={prefs.boardTheme} onChange={(e) => prefs.set('boardTheme', e.target.value as typeof prefs.boardTheme)}><option value="forest">Forest</option><option value="slate">Slate</option><option value="walnut">Walnut</option></select></label>
-          <label className="field"><span className="field-label">Piece theme</span><select className="select" value={prefs.pieceTheme} onChange={(e) => prefs.set('pieceTheme', e.target.value as typeof prefs.pieceTheme)}><option value="classic">Classic original SVG</option><option value="meridian">Meridian tinted SVG</option><option value="staunton">Staunton vector</option></select></label>
+          <label className="field"><span className="field-label">Board theme</span><select className="select" value={prefs.boardTheme} onChange={(e) => prefs.set('boardTheme', e.target.value as typeof prefs.boardTheme)}>{BOARD_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}</select></label>
+          <label className="field"><span className="field-label">Piece theme</span><select className="select" value={prefs.pieceTheme} onChange={(e) => prefs.set('pieceTheme', e.target.value as typeof prefs.pieceTheme)}>{PIECE_THEMES.map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}</select></label>
         </div></section>
         <aside className="card"><h2 className="card-title">Board behaviour</h2><div className="stack" style={{ gap: '.7rem' }}>
           <label className="checkbox"><input type="checkbox" checked={prefs.showCoordinates} onChange={(e) => prefs.set('showCoordinates', e.target.checked)} /> Show coordinates</label>

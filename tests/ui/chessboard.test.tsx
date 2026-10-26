@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { ChessBoard } from '../../web/src/features/chess/ChessBoard';
 import { ThemeProvider } from '../../web/src/app/ThemeProvider';
 
@@ -7,7 +8,7 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 function renderBoard(props: Partial<React.ComponentProps<typeof ChessBoard>> = {}) {
   const onMove = vi.fn();
-  const utils = render(<ThemeProvider><ChessBoard fen={START_FEN} onMove={onMove} {...props} /></ThemeProvider>);
+  const utils = render(<MemoryRouter><ThemeProvider><ChessBoard fen={START_FEN} onMove={onMove} {...props} /></ThemeProvider></MemoryRouter>);
   return { ...utils, onMove };
 }
 
@@ -24,7 +25,7 @@ describe('ChessBoard', () => {
 
   it('requires a promotion choice and sends the selected piece to the server callback', () => {
     const onMove = vi.fn();
-    render(<ThemeProvider><ChessBoard fen="7k/P7/8/8/8/8/8/7K w - - 0 1" onMove={onMove} /></ThemeProvider>);
+    render(<MemoryRouter><ThemeProvider><ChessBoard fen="7k/P7/8/8/8/8/8/7K w - - 0 1" onMove={onMove} /></ThemeProvider></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: /Keyboard mode/i }));
     fireEvent.change(screen.getByPlaceholderText('e2'), { target: { value: 'a7' } });
     fireEvent.change(screen.getByPlaceholderText('e4'), { target: { value: 'a8' } });
@@ -36,6 +37,7 @@ describe('ChessBoard', () => {
 
   it('hides pointer move controls when the board is disabled', () => {
     renderBoard({ disabled: true, onMove: undefined });
-    expect(screen.getByText(/Stockfish 19 GPL engine available in Analysis/)).toBeInTheDocument();
+    expect(screen.getByText(/Stockfish/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /analysis board/i })).toHaveAttribute('href', '/analysis');
   });
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Generates the chess piece set into public/pieces/.
+ * Generates the original chess piece set into web/public/pieces/.
  *
  * Custom Staunton-inspired silhouettes, hand-authored here (no CDN, no external
  * download - consistent with the app's vendored-asset policy). Pieces are built
@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'pieces');
+const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'public', 'pieces');
 fs.mkdirSync(OUT, { recursive: true });
 
 const SW = 1.6;

@@ -1,0 +1,12 @@
+{
+  "name": "Rookstone Arena",
+  "short_name": "Rookstone",
+  "description": "Competitive online chess with an authoritative server and genuine engine analysis.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

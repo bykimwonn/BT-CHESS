@@ -1,242 +1,161 @@
-# ♔ BetChess ZW
+# Rookstone Arena
 
-Zimbabwe's real-money chess platform. Play the rated **Lichess Stockfish 18** engine ladder
-(Easy 800 → Grandmaster 2850), **invite a friend with a shareable link**, or quick-match against
-another player staking the same amount. Every result updates your **Elo rating** (standard Elo with
-provisional K-factor). The wallet runs on **EcoCash** (plus InnBucks, OneMoney, bank transfer and
-cash agents), with a sandbox mode so the whole flow is testable before you have merchant
-credentials.
+Rookstone Arena is a production-oriented online chess competition application built as a complete replacement for the repository's obsolete Express/static-page implementation. It combines an authoritative Node/TypeScript game server, React/Vite/TypeScript client, PostgreSQL-compatible persistence, genuine Stockfish 19 WASM analysis, and a compliance-gated financial ledger.
 
-The client is a single-page dark **glassmorphism** interface: frosted glass cards, SVG chess pieces,
-5 board themes, a conversational "Chess Concierge" planner with quick-action pills, micro-interactions
-on every control, and real draw offers between friends.
+> **Real-money competitions are disabled by default.** Free chess works independently. No live provider credentials, legal authorisation, operator licence, age-verification contract or compliance activation manifest is included in this repository. A configuration flag alone cannot enable real money.
 
-## Game modes
+## What is implemented
 
-| Mode | How it works | Stake | Rated |
-| --- | --- | --- | --- |
-| **vs Engine** | Server-authoritative Lichess Stockfish 18, 5 strength tiers | optional | yes |
-| **Invite a friend** | Create a challenge → share the `?invite=FR-XXXX` link → friend joins instantly | optional (escrow) | yes |
-| **Quick match** | Matched with another player staking the same amount | set by slider | yes |
-| **Spectate** | Share/`open ?game=` links to watch live with chat | — | — |
-| **Puzzles** | Tactics trainer with its own Elo rating | free | tactics Elo |
+- Prominent **Play Free** and **Play for Money** mode choice on the homepage and Play screen. Free play is international, immediate and independent of payment providers; money matches are optional, eligibility-checked and disabled until authorised.
+- Original dark/light premium chess UI, responsive from 320 px upward, with keyboard board navigation, focus states, reduced-motion support and no horizontal overflow in verified routes.
+- `chess.js` legal-move board, drag/drop and click/keyboard move input, promotion picker, clocks, captured pieces, SAN/PGN/FEN, replay, spectators and post-game analysis.
+- Socket.IO real-time multiplayer with authenticated sessions, room-based state, reconnection, stale-version rejection, duplicate-move nonces, server-authoritative clocks, timeout and abandonment adjudication.
+- Open, direct and private challenges; rating-aware matchmaking; hashed competition terms; atomic stake reservation; idempotent exactly-once settlement; draw/void refunds; configurable commission (default illustrative 5%).
+- Double-entry USD-cent ledger with immutable posted entries, database-enforced balanced journals, overdraft prevention, compensating corrections, wallet history, CSV statements and receipts.
+- Paynow, EcoCash and PesePay server adapters based on published documentation; signed/hash-verified callbacks, server-to-server status checks, sandbox/production separation, explicit disabled OneMoney adapter; no fake deposits or redirect-based success.
+- Secure auth: Argon2id, rotating sessions, CSRF, rate limits, optional TOTP MFA, RBAC, MFA/confirmation for privileged actions, email verification, password recovery, session revocation, security/audit logs.
+- Genuine GPL-3.0 Stockfish 19 Lite WASM UCI engine in browser and Node, with health checks, cancellation, concurrency limits, move-quality summaries and human-review-only fair-play signals.
+- Free international tournaments with real entrants, deterministic Swiss-style pairing, standings and no financial transactions.
+- Voluntary country flags, IANA timezone preferences, UTC storage/local-time display, jurisdiction policies, signed age/identity/location verification integration, account-currency separation and explicit multi-currency rate/quote design.
+- Puzzles, lessons, leaderboard, profiles, history, settings, help, legal policies, notifications, disputes, responsible-play controls and a full admin dashboard.
+- Versioned PostgreSQL migrations, PGlite embedded PostgreSQL for zero-service local/test use, structured logging, graceful shutdown, restart recovery and reconciliation jobs.
 
-Friends in a live game can offer/accept **draws** over the socket; stakes are held in escrow and the
-winner takes 90% (10% platform fee), draws refund both sides. Expired invites auto-refund the host.
+## Quick start (local)
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  browser                │  server (Node)                         │
-│  ─────────────────────  │  ─────────────────────────────────────  │
-│  board + wallet UI      │  authoritative game state & clocks     │
-│  Lichess SF18 (wasm) ───┼─► analysis only (eval bar / hints)     │
-│     ↓ fallback          │  Lichess SF18 (wasm)  ← plays the game │
-│  server analysis        │  Lichess cloud eval   ← GM-tier moves  │
-│                         │  payments: EcoCash / InnBucks / ...    │
-└──────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Quick start
+Requirements: Node.js **>= 22.12**, npm >= 10. No PostgreSQL service is required for local development because PGlite provides embedded PostgreSQL.
 
 ```bash
-npm install          # also vendors chess.js + the Lichess engine into public/
-npm start            # http://localhost:3000   (admin: /admin)
-npm test             # 36 unit + client tests (engine, payments, ratings, client boot)
-npm run test:e2e     # plays a real game against the engine (server must be running)
+cp .env.example .env
+npm install
+npm run dev
 ```
 
-No configuration is required. Out of the box:
+- React/Vite dev server: `http://localhost:5173`
+- API + Socket.IO: `http://localhost:3001`
+- The API runs migrations automatically at startup. `npm run migrate` can run them separately.
+- Local data is stored in `./data/pglite` (gitignored). Delete it only if you intentionally want a fresh local database.
 
-* the **Lichess Stockfish 18** wasm engine runs in-process (no API key, no external service),
-* **payments run in sandbox mode** — deposits and withdrawals settle automatically so you can
-  click through the full flow,
-* new wallets start at **0 balance** for production; set `WELCOME_BONUS` to give test credit,
-* every player starts at **1200 Elo** (provisional until 25 rated games), with a separate tactics rating.
-
----
-
-## What was broken, and what changed
-
-| Before | Now |
-| --- | --- |
-| `public/app.js` had a **syntax error** (`'w':'b' : 'w'`) — the whole client never executed | fixed; a jsdom smoke test now boots the page on every `npm test` |
-| `chess.js` 0.13.4 pinned, but code called the **1.x API** (`isGameOver()` etc.) — every move threw | upgraded to **chess.js 1.4.0** (ships CJS + ESM) and every call goes through a `safeMove()` helper, because 1.x *throws* on illegal moves |
-| "engine" was a **1-ply material grabber** (`getServerEngineMove`) labelled Grandmaster 2850 | **Lichess Stockfish 18** (NNUE) plays every computer move |
-| Stockfish was loaded as a 1.5 MB **main-thread** `<script>`, and `initStockfish()` was never called | engine runs in a **Web Worker**, with server-side analysis as fallback |
-| client sent its own engine moves (`engineReply`) *and* the server generated one → duplicate/illegal moves | **server is authoritative**; clients never send engine moves (also removes the cheat vector) |
-| `EcoCash` was a stub object; references like `DEP-<uuid>-<ts>` were split on `-` and lost the user id | real provider layer with references, lifecycle, idempotent settlement and signed webhooks |
-| `handleEngineOver` was defined inside the socket scope and unreachable from the engine | hoisted to module scope |
-
----
-
-## The engine
-
-### Server (authoritative)
-
-`lib/engine/` resolves every computer move through a ladder, degrading gracefully:
-
-1. **Lichess cloud eval** — `GET https://lichess.org/api/cloud-eval` (no key required, cached,
-   circuit-broken). Used for the full-strength tiers (Master, Grandmaster), the analysis panel and
-   anti-cheat scoring. If lichess.org is unreachable it switches itself off — nothing breaks.
-2. **Lichess Stockfish 18 wasm** — the engine behind lichess.org analysis
-   (`@lichess-org/stockfish-web`), running in-process. ~700k nodes/second, mate-in-2 found in
-   well under a second.
-3. **Pure-JS fallback** — a small negamax + quiescence searcher with zero dependencies, so the
-   app still plays even if wasm cannot start.
-4. Random legal move (last resort).
-
-Strength is shaped per tier with `Skill Level`, `UCI_LimitStrength`/`UCI_Elo`, depth caps and a
-deliberate blunder rate, so every tier stays beatable:
-
-| Tier | Elo | Payout | Engine settings |
-| --- | --- | --- | --- |
-| Easy | 800 | 1.6× | Skill 0, depth ≤ 4, 35 % off-book moves |
-| Medium | 1250 | 2.5× | Skill 6, depth ≤ 8, 18 % off-book |
-| Hard | 1800 | 4.2× | UCI_Elo 1800 |
-| Master | 2400 | 8× | UCI_Elo 2400 + cloud eval |
-| Grandmaster | 2850 | 15× | UCI_Elo 2850 + cloud eval + jackpot |
-
-### Browser (analysis only)
-
-`public/engine-worker.js` runs the same Lichess build in a Web Worker for the eval bar, hints and
-the analysis tab. If the worker cannot start (old browser, blocked wasm) `public/js/engine-client.js`
-quietly falls back to the server over the socket — the UI shows **Server engine ✓**.
+For a production-like single process:
 
 ```bash
-npm run engine:bench    # strength + timing report for the whole ladder
+npm run build
+npm start
 ```
 
----
+`npm start` serves `dist/web` and `dist-server/server/index.js`. Run it from the repository root so migration paths and static assets resolve correctly.
 
-## Payments
+Create an initial administrator (set strong values in your shell, not in Git):
 
-### Sandbox vs live
-
-`PAYMENT_MODE=mock` (default) → every provider settles itself after
-`MOCK_SETTLEMENT_DELAY_MS`, including failures if you set `MOCK_FAILURE_RATE`. The UI, wallet,
-reference numbers, admin queue and webhooks all behave exactly as they will in production.
-
-`PAYMENT_MODE=live` → real HTTP calls. A provider only goes live when its credentials are present;
-anything unset stays in sandbox. **Live webhooks are rejected unless the provider's
-`*_WEBHOOK_SECRET` is set** (HMAC-SHA256 over the raw body, compared in constant time).
-
-### Providers
-
-| id | Method | Deposit | Withdraw | Settled by |
-| --- | --- | --- | --- | --- |
-| `ecocash` | EcoCash (Econet/Cassava) | C2B prompt on handset | B2C payout | callback + status poll |
-| `innbucks` | InnBucks | C2B | B2C | callback + status poll |
-| `onemoney` | OneMoney (NetOne) | C2B | B2C | callback + status poll |
-| `bank` | Bank / Zimswitch | transfer with reference | transfer | admin approval in `/admin` |
-| `agent` | Cash agent | 6-character code | code | admin approval in `/admin` |
-
-All three mobile wallets share one configurable HTTP client
-(`lib/payments/providers/wallet-http.js`): base URL, auth mode (`oauth2` / `apikey` / `bearer` /
-`none`) and every endpoint path are env-driven, because the exact contract depends on your
-merchant agreement — check them against the docs you were issued with.
-
-### Transaction lifecycle
-
-```
-pending ──► processing ──► completed
-   │            │
-   └────────────┴──────► failed / expired / rejected   (withdrawals are refunded)
+```bash
+ADMIN_EMAIL='operator@example.com' \
+ADMIN_USERNAME='OperatorOne' \
+ADMIN_PASSWORD='a-strong-unique-password-123' \
+npm run bootstrap:admin
 ```
 
-* every transaction gets a reference (`DEP-…` / `WD-…`) — **settlement is idempotent**, so a
-  replayed webhook can never credit the same deposit twice (covered by a test),
-* withdrawals hold the funds immediately and refund automatically if they fail,
-* `POST /api/payments/webhook/:provider` verifies the signature against the **raw** body,
-* `/admin` lists every transaction with Approve / Reject buttons plus engine status.
+Then sign in, enable MFA in Settings → Security, and use `/admin`.
 
-### API
+## Verification
 
-| Method | Route | Purpose |
+Run the full verification suite:
+
+```bash
+npm run typecheck
+npm run build
+npm test
+```
+
+`npm test` executes:
+
+| Suite | Command | Coverage |
 | --- | --- | --- |
-| `GET` | `/api/payments/providers` | methods, limits, live/sandbox flags |
-| `GET` | `/api/payments/status` | mode, volumes, pending count |
-| `POST` | `/api/payments/deposit` | `{userId, provider, amount, phone, account}` |
-| `POST` | `/api/payments/withdraw` | `{userId, provider, amount, phone, account}` |
-| `GET` | `/api/payments/:reference` | poll one transaction |
-| `POST` | `/api/payments/webhook/:provider` | provider callback (raw body, signed) |
-| `POST` | `/api/admin/payments/approve` | `{password, reference, reject}` |
-| `GET` | `/api/engine/status` | engine + cloud-eval health |
-| `POST` | `/api/engine/analyse` | `{fen, movetimeMs, multiPv}` |
+| Unit | `npm run test:unit` | money math, chess rules, country/timezone helpers, tournament pairing, Paynow hashes, TOTP, PesePay crypto, settlement math, compliance signing |
+| Integration | `npm run test:integration` | migrations, ledger/currency invariants, auth/CSRF/RBAC/MFA, games, clocks, settlement, disputes, jurisdiction policies, payment failures, tournaments, terms |
+| UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, theme, dialogs, quote disclosure |
+| Server E2E | `npm run test:e2e` | two authenticated Socket.IO clients, duplicate/stale moves, PGN, ratings, wallet, persistence across restart |
+| Browser | `npm run test:browser` | real npm-packaged Chromium: free/money mode choice, two users in different timezones, private invitations, reconnection, engine WASM, RBAC, wallet, mobile overflow, restart |
 
-The old `/api/ecocash/*` routes still work and now map onto the same service.
+The browser suite builds the production bundle, starts the compiled server with a fresh PGlite database, launches a real Chromium binary from `@sparticuz/chromium` via `playwright-core`, and does not require an external browser download in this environment.
 
----
+## Architecture
 
-## Configuration
-
-Copy `.env.example` to `.env`. Only four things matter to get going:
-
-```bash
-PORT=3000
-ADMIN_PASSWORD=change-me
-BASE_URL=https://yourdomain.com   # public HTTPS origin - wallets call back here
-PAYMENT_MODE=mock                 # flip to live once merchant credentials are in
+```
+web/                    React 19 + Vite + TypeScript client
+  src/app/              providers, router, layout
+  src/features/chess/   board, game state, sidebar, clocks, replay
+  src/features/engine/  browser Stockfish UCI worker hook and panel
+  src/pages/            landing, play, competitions, game, puzzles, learn, analysis, wallet, admin, legal…
+  public/engine/        vendored GPL-3.0 Stockfish 19 lite-single WASM distribution
+  public/pieces/        original hand-authored chess piece SVGs
+server/                 Express 4 + Socket.IO authoritative API
+  db/migrations/        versioned PostgreSQL schema
+  auth/                 sessions, Argon2id, TOTP, CSRF, password recovery
+  games/                chess rules, clocks, state machine, realtime events
+  competition/          challenges, matchmaking, terms, reservations
+  finance/              double-entry ledger, settlement, reconciliation
+  payments/             provider adapters, callbacks, verification, reconciliation
+  engine/               Node Stockfish UCI process pool, move-quality analysis
+  admin/                dashboard, disputes, reviews, audit, compliance
+shared/                 pure contracts and validation shared by client/server
+tests/                  unit, integration, UI, E2E and real-browser tests
+docs/                   architecture, deployment, operations, payments, compliance, security, costs, API
 ```
 
-Then the EcoCash block:
+The browser never supplies balances, results, clocks, ratings or settlements. Financial and game state transitions are committed in PostgreSQL transactions.
 
-```bash
-ECOCASH_BASE_URL=https://developers.ecocash.co.zw
-ECOCASH_MERCHANT_CODE=12345
-ECOCASH_API_KEY=…
-ECOCASH_WEBHOOK_SECRET=…          # required in live mode, callbacks fail closed without it
-```
+## Competition modes
 
-EcoCash needs a **public HTTPS callback URL** (`${BASE_URL}/api/payments/webhook/ecocash`). While
-developing locally, point `BASE_URL` at a tunnel (`cloudflared tunnel --url http://localhost:3000`)
-so you can receive real callbacks before you own a domain.
+| Mode | Meaning | Real money |
+| --- | --- | --- |
+| `free` | Default. Free chess only. | Disabled |
+| `test` | Isolated internal test credits, clearly labelled and non-withdrawable. | Disabled |
+| `real` | Requires all legal/provider/age/AML prerequisites **and** a signed activation manifest. | Only when fully authorised |
 
----
+`OPERATING_MODE=real` alone is insufficient. See [docs/COMPLIANCE.md](docs/COMPLIANCE.md).
 
-## Deployment
+## Payment provider status
 
-Everything a PaaS needs is in the repo:
+Adapters exist for:
 
-| File | Use |
-| --- | --- |
-| `Procfile` | Heroku / Fly / Dokku / most buildpacks |
-| `Dockerfile` | any container host (`docker build -t betchess-zw .`) |
-| `render.yaml` | Render blueprint (secrets marked `sync: false`) |
-| `railway.toml` | Railway |
+- **Paynow** — redirect initiation, SHA-512 hash verification, status polling and merchant trace.
+- **EcoCash** — Instant Payments charge/lookup/refund and EPG Merchant-to-Subscriber payout/lookup.
+- **PesePay** — AES-256-CBC payloads, redirect initiation, result callback header check and server-side status lookup.
+- **OneMoney** — deliberately disabled direct adapter; no verified public direct merchant API contract was available. Use an approved aggregator (for example Paynow) after merchant approval.
 
-```bash
-docker build -t betchess-zw .
-docker run -p 3000:3000 --env-file .env -v betchess-data:/app/data betchess-zw
-```
+All adapters are unconfigured until credentials and merchant approval are supplied. See [docs/PAYMENTS.md](docs/PAYMENTS.md).
 
-Notes:
+## Documentation
 
-* `npm ci` runs `scripts/vendor-assets.mjs` (postinstall), which copies chess.js and the
-  Lichess wasm into `public/` — the app has **no CDN dependency**.
-* the JSON database lives in `data/`; mount a volume so balances survive a restart.
-* one engine process is enough for a small deployment — searches are queued with priority
-  (game moves > analysis > anti-cheat).
+- [Architecture](docs/ARCHITECTURE.md)
+- [International architecture](docs/INTERNATIONAL.md)
+- [API](docs/API.md)
+- [Deployment](docs/DEPLOYMENT.md)
+- [Operations](docs/OPERATIONS.md)
+- [Payments](docs/PAYMENTS.md)
+- [Compliance & activation](docs/COMPLIANCE.md)
+- [Security](docs/SECURITY.md)
+- [Testing](docs/TESTING.md)
+- [Hosting costs](docs/COSTS.md)
+- [Acceptance report](docs/ACCEPTANCE.md)
+- [Third-party licences](docs/THIRD_PARTY_LICENSES.md)
 
----
+## Two-mode and international behaviour
 
-## Tests
+- `OPERATING_MODE=free` keeps free chess fully functional with all payment providers disabled.
+- `OPERATING_MODE=test` allows isolated, clearly labelled test-credit competitions where a jurisdiction policy permits `test` competitions. They are not real money and cannot be withdrawn.
+- `OPERATING_MODE=real` still requires the signed compliance manifest, legal/provider flags, verified 18+/identity/location status and a jurisdiction policy permitting `real` competitions.
+- `/api/eligibility` returns the server's decision for the signed-in player. Country of residence is voluntary and never sufficient for real-money eligibility.
+- The financial ledger remains USD-cent based. Other currencies have separate account namespaces and explicit non-applied conversion quotes; no silent conversion occurs.
 
-```bash
-npm test          # 36 tests: engine, payments, Elo ratings, client boot (jsdom)
-npm run test:e2e  # end-to-end against a running server
-```
+## Important limitations
 
-`npm test` covers: the engine loads and finds mates, every tier returns legal moves, invalid FENs,
-deposit/withdraw lifecycles, double-credit protection, refunds, admin approval, webhook signature
-verification, phone normalisation, and that the page boots and renders 64 squares.
+- No real-money launch is authorised by this repository. Legal opinion, licence, provider approval, 18+ verification, AML/KYC, tax/withholding treatment and a signed activation manifest are outstanding.
+- SMTP must be configured for production email delivery. The server never pretends an undelivered email was sent.
+- MFA is available for every account and required for privileged admin controls in production; enforce it for all administrators before launch.
+- Provider sandbox credentials must never be used in real-money mode. Sandbox credits are test credits only.
+- Engine similarity creates a review signal; it never triggers an automatic ban, confiscation or rating penalty.
+- Operator identity, support contact, privacy contact and jurisdiction placeholders must be replaced before public launch.
 
----
+## Licence
 
-## Legal
-
-Real-money gaming in Zimbabwe requires the appropriate licensing and age/KYC controls. This
-codebase ships with an 18+ disclaimer, phone-verified wallets (OTP) and server-side anti-cheat,
-but **compliance, licensing and ZIMRA obligations are yours**. Keep `PAYMENT_MODE=mock` until you
-have the paperwork.
+Original application code is provided under the repository's MIT licence, except vendored third-party assets. Stockfish 19 Lite WASM is **GPL-3.0-or-later**; the full licence text is in `docs/licenses/stockfish-GPL-3.0.txt` and attribution/source links are in [docs/THIRD_PARTY_LICENSES.md](docs/THIRD_PARTY_LICENSES.md). Redistribution of the GPL engine must comply with that licence.

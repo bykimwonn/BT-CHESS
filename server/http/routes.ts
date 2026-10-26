@@ -724,6 +724,40 @@ export function createApiRouter(ctx: AppContext): Router {
   return router;
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  username: 'Username',
+  email: 'Email address',
+  password: 'Password',
+  confirmPassword: 'Password confirmation',
+  displayName: 'Display name',
+  birthDate: 'Date of birth',
+  country: 'Country',
+  timezone: 'Time zone',
+  accountCurrency: 'Currency',
+  stakeCents: 'Stake',
+  mfaCode: 'Authenticator code',
+};
+
+/**
+ * Validation failures used to be reported as a bare "Invalid request", which told
+ * the person submitting the form nothing (a password missing an uppercase letter
+ * looked identical to a malformed request). Report the first problem in plain
+ * language, and every problem per field, so the client can show it next to the
+ * input that needs changing.
+ */
+export function validationErrorBody(issues: z.ZodIssue[]) {
+  const fields: Record<string, string> = {};
+  for (const issue of issues) {
+    const key = issue.path.map(String).join('.') || '_';
+    if (!fields[key]) fields[key] = issue.message;
+  }
+  const primary = issues[0];
+  if (!primary) return { code: 'validation_error', message: 'Request could not be validated', fields, detail: issues };
+  const label = FIELD_LABELS[primary.path.map(String).join('.')] ?? '';
+  const message = label ? `${label}: ${primary.message}` : primary.message;
+  return { code: 'validation_error', message, fields, detail: issues };
+}
+
 export function apiErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
   if (res.headersSent) return;
   if (err instanceof AppError) {
@@ -731,7 +765,7 @@ export function apiErrorHandler(err: unknown, req: Request, res: Response, _next
     return;
   }
   if (err instanceof z.ZodError) {
-    res.status(400).json({ error: { code: 'validation_error', message: 'Invalid request', detail: err.issues } });
+    res.status(400).json({ error: validationErrorBody(err.issues) });
     return;
   }
   if (err instanceof ProviderError) {

@@ -4,6 +4,8 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly detail?: unknown,
+    /** Per-field messages from the server, keyed by request field name. */
+    public readonly fields?: Record<string, string>,
   ) { super(message); this.name = 'ApiError'; }
 }
 
@@ -45,9 +47,9 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
       : await response.text();
   if (!response.ok) {
     const error = typeof payload === 'object' && payload && 'error' in payload
-      ? (payload as { error: { code?: string; message?: string; detail?: unknown } }).error
+      ? (payload as { error: { code?: string; message?: string; detail?: unknown; fields?: Record<string, string> } }).error
       : { code: 'http_error', message: `Request failed with status ${response.status}` };
-    throw new ApiError(response.status, error.code ?? 'http_error', error.message ?? 'Request failed', error.detail);
+    throw new ApiError(response.status, error.code ?? 'http_error', error.message ?? 'Request failed', error.detail, error.fields);
   }
   return payload as T;
 }

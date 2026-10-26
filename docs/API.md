@@ -2,6 +2,25 @@
 
 All endpoints are under `/api`. Cookies are first-party and state-changing requests require the `X-CSRF-Token` header equal to the `rs_csrf` cookie and an allowed `Origin`. Admin endpoints additionally require `role=admin`; if the admin has MFA enabled, send `X-MFA-Code`.
 
+## Errors
+
+Errors use one envelope: `{"error": {"code": "...", "message": "...", ...}}`. `message` is written to be shown to the player directly.
+
+Validation failures (`400`, code `validation_error`) also include the problem per field, so a form can highlight the exact input instead of showing a generic failure:
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Password: Include an uppercase letter",
+    "fields": { "password": "Include an uppercase letter" },
+    "detail": [{ "path": ["password"], "message": "Include an uppercase letter" }]
+  }
+}
+```
+
+`fields` is keyed by request field name and holds only the first problem per field; `detail` holds every issue for programmatic use. Other notable codes: `conflict` (email or username taken), `unauthorized`, `forbidden`, `csrf_failed`, `rate_limited`, `mfa_required`, `not_found`, `payment_provider_error`.
+
 ## Public
 
 | Method | Path | Purpose |

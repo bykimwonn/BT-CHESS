@@ -14,6 +14,7 @@ Free play is never converted into a money match. The mode is part of the challen
 ## Global player experience
 
 - Registration accepts an optional country of residence and an IANA timezone. Country flags and opponent timezone labels are shown only when the player opts in.
+- The timezone is read from the browser. Some mobile browsers and older Android WebViews return identifiers `Intl` itself rejects (for example `GMT+02:00`). Signup never fails because of that: an unusable value is stored as `UTC`, and the player can pick a real zone in Settings. Explicit timezone edits in Settings are still validated strictly, because there the choice is deliberate.
 - All timestamps are stored in UTC/TIMESTAMPTZ. The UI renders `Intl.DateTimeFormat` local times; the browser test runs two Chromium contexts in `Africa/Harare` and `Asia/Tokyo` and verifies different correct local timestamps.
 - Open challenges, direct username challenges, private shareable invitation links, rating-aware matchmaking and tournaments are available internationally. Free chess does not require a shared country, currency or payment provider.
 - Games use server-authoritative state, clocks, legal moves, results and ratings. Reconnection reloads the persisted snapshot; browser and server E2E suites verify this.

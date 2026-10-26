@@ -12,8 +12,22 @@ const int = (value: string | undefined, fallback: number) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 };
-const publicOriginOverride = (process.env.PUBLIC_ORIGIN ?? '').trim();
+const trimOrigin = (value: string) => value.trim().replace(/\/+$/, '');
+/** Render injects its own public URL, so a missing PUBLIC_ORIGIN is recoverable there. */
+const platformOrigin = (() => {
+  const renderUrl = trimOrigin(process.env.RENDER_EXTERNAL_URL ?? '');
+  if (renderUrl) return renderUrl;
+  const renderHost = (process.env.RENDER_EXTERNAL_HOSTNAME ?? '').trim();
+  return renderHost ? `https://${renderHost}` : '';
+})();
+const publicOriginOverride = trimOrigin(process.env.PUBLIC_ORIGIN ?? '');
 const corsOriginsOverride = (process.env.CORS_ORIGINS ?? '').trim();
+export const DEFAULT_PUBLIC_ORIGIN = 'http://localhost:5173';
+const effectivePublicOrigin = publicOriginOverride || platformOrigin || DEFAULT_PUBLIC_ORIGIN;
+
+export type PublicOriginSource = 'explicit' | 'platform' | 'default';
+const publicOriginSource: PublicOriginSource =
+  publicOriginOverride ? 'explicit' : platformOrigin ? 'platform' : 'default';
 
 export const env = {
   root,
@@ -21,9 +35,10 @@ export const env = {
   isProduction: process.env.NODE_ENV === 'production',
   port: int(process.env.PORT, 3001),
   host: process.env.HOST ?? '0.0.0.0',
-  publicOrigin: publicOriginOverride || 'http://localhost:5173',
-  corsOrigins: (corsOriginsOverride || publicOriginOverride || 'http://localhost:5173')
-    .split(',').map((s) => s.trim()).filter(Boolean),
+  publicOrigin: effectivePublicOrigin,
+  publicOriginSource,
+  corsOrigins: (corsOriginsOverride || effectivePublicOrigin)
+    .split(',').map((s) => trimOrigin(s)).filter(Boolean),
   databaseUrl: process.env.DATABASE_URL ?? '',
   dbDriver: (process.env.DB_DRIVER ?? (process.env.DATABASE_URL ? 'postgres' : 'pglite')) as 'postgres' | 'pglite',
   pgliteDir: process.env.PGLITE_DIR ?? path.join(root, 'data', 'pglite'),
@@ -124,9 +139,9 @@ export function assertProductionSafety(): void {
   if (env.dbDriver === 'pglite' && !env.allowEmbeddedInProduction) {
     problems.push('DATABASE_URL must point at PostgreSQL, or ALLOW_EMBEDDED_DB=true must be set explicitly for an intentional single-node installation.');
   }
-  if (!publicOriginOverride) {
+  if (publicOriginSource === 'default') {
     problems.push('PUBLIC_ORIGIN must be the exact HTTPS origin users open (for example https://chess.example.com).');
-  } else if (!/^https:\/\//i.test(publicOriginOverride) && !/localhost|127\.0\.0\.1/i.test(publicOriginOverride)) {
+  } else if (!/^https:\/\//i.test(env.publicOrigin) && !/localhost|127\.0\.0\.1/i.test(env.publicOrigin)) {
     problems.push('PUBLIC_ORIGIN must use https:// in production so session cookies and WebSocket origins are trustworthy.');
   }
   if (problems.length) throw new ConfigurationError(problems);

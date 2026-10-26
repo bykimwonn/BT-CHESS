@@ -6,7 +6,7 @@ Date: **26 October 2026 (UTC)**. This report intentionally separates verified re
 
 | Requirement | Verification |
 | --- | --- |
-| Production build and tests | `npm run typecheck`, `npm run build`, `npm test`: exit 0. 66 test cases + 68 E2E/browser/deployment checks, 0 failures. A clean `npm ci` also exited 0 and vendored the GPL engine. See [TESTING.md](TESTING.md). |
+| Production build and tests | `npm run typecheck`, `npm run build`, `npm test`: exit 0. 66 test cases + 69 E2E/browser/deployment checks, 0 failures. A clean `npm ci` also exited 0 and vendored the GPL engine. See [TESTING.md](TESTING.md). |
 | Obsolete product replaced | Root `server.js`, legacy `public/`, `lib/` and old tests removed; new `server/`, `web/`, `shared/`, migrations, tests and docs added. |
 | Responsive actual UI | Real Chromium at 1440×900 and 390×844; ten routes had no horizontal overflow at 390 px; dark/light theme, focus-visible CSS, keyboard board and reduced-motion support implemented. |
 | Legal chess and terminal results | `chess.js` unit/integration tests, checkmate/stalemate/insufficient material/threefold/fifty-move/promotion, server-authoritative timeout/resignation/draw and browser game verified. |

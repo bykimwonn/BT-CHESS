@@ -32,14 +32,14 @@ npm run test:deploy
 | UI | `vitest run --config vitest.config.ts` — 5 files, 11 pass, 0 fail | 11 tests |
 | Server E2E | `tsx tests/e2e.ts` — `ok: true` | 21 checks |
 | Browser | real Chromium + production bundle — `ok: true` | 42 checks |
-| Deployment | `node tests/deploy-entrypoint.mjs` — passes | 5 checks |
+| Deployment | `node tests/deploy-entrypoint.mjs` — passes | 6 checks |
 | Typecheck | `tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json` | 0 errors |
 | Production build | TypeScript server + Vite web bundle | 0 errors |
 | Clean install | `npm ci` in a fresh copy of the repository | exit 0; postinstall vendored GPL Stockfish assets |
 
-Combined: **66 automated test cases**, **68 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
+Combined: **66 automated test cases**, **69 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
 
-The deployment suite runs the exact stale host command `node server.js` against the compiled server, asserts `/api/health` responds and reports its database driver, asserts clean `SIGTERM` shutdown, asserts a missing build exits non-zero with actionable build/start/Node guidance, asserts incomplete production configuration fails closed while listing every missing setting, and asserts `engines`, `.node-version`, `render.yaml` and `start` stay pinned to the verified runtime.
+The deployment suite runs the exact stale host command `node server.js` against the compiled server and asserts the port opens in well under the 60-second platform scan window (observed: 362 ms bound, 3.1 s ready), that `/api/health` is 200 only when ready and reports its database driver, and that `SIGTERM` shuts down cleanly. It asserts incomplete production configuration keeps the port bound and returns 503 listing every missing setting instead of crash-looping, that `RENDER_EXTERNAL_URL` supplies the public origin when `PUBLIC_ORIGIN` is unset, that a missing build exits 1 with actionable guidance and performs no runtime build, and that `engines`, `.node-version`, `render.yaml` and `start` stay pinned to the verified runtime.
 
 ## What each suite proves
 

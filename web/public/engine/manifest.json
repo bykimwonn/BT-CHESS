@@ -1,0 +1,12 @@
+{
+  "engine": "Stockfish 19 Lite WASM",
+  "distribution": "stockfish npm package 19.0.1 (nmrugg/stockfish.js)",
+  "upstream": "https://github.com/official-stockfish/Stockfish",
+  "port": "https://github.com/nmrugg/stockfish.js",
+  "licence": "GPL-3.0-or-later",
+  "files": [
+    "stockfish-19-lite-single.js",
+    "stockfish-19-lite-single.wasm"
+  ],
+  "verifiedBy": "UCI handshake: id name Stockfish 19 Lite WASM / uciok / readyok"
+}

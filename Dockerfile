@@ -1,34 +1,30 @@
-# BetChess ZW - production image
-#   docker build -t betchess-zw .
-#   docker run -p 3000:3000 --env-file .env betchess-zw
-FROM node:22-slim
-
-ENV NODE_ENV=production \
-    PORT=3000 \
-    HOST=0.0.0.0
-
+# syntax=docker/dockerfile:1
+FROM node:22.22-bookworm-slim AS build
 WORKDIR /app
-
-# Install dependencies first so code changes do not bust the layer cache.
+ENV NODE_ENV=development
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# postinstall vendors the GPL Stockfish distribution; copy that script first.
+COPY scripts/vendor-engine.mjs ./scripts/vendor-engine.mjs
+RUN npm ci
+COPY . .
+RUN npm run build && npm prune --omit=dev
 
-COPY server.js ./
-COPY lib ./lib
-COPY public ./public
-COPY scripts ./scripts
-
-# Copy the browser assets (chess.js + Lichess Stockfish wasm) out of node_modules
-# so the app has no CDN dependency at runtime.
-RUN node scripts/vendor-assets.mjs
-
-# JSON database lives here; mount a volume to persist it.
-RUN mkdir -p /app/data
-VOLUME ["/app/data"]
-
-EXPOSE 3000
-
+FROM node:22.22-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=3001 \
+    HOST=0.0.0.0 \
+    ALLOW_EMBEDDED_DB=false
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist-server ./dist-server
+COPY --from=build /app/dist/web ./dist/web
+COPY --from=build /app/server/db/migrations ./server/db/migrations
+COPY --from=build /app/docs/licenses ./docs/licenses
+COPY --from=build /app/.env.example ./.env.example
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
+EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/config').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
-
-CMD ["node", "server.js"]
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["npm", "start"]

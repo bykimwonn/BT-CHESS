@@ -3,6 +3,10 @@ import type { PublicUser } from '@shared/contracts';
 import { api, ApiError } from '../lib/api';
 
 interface SessionResponse { user: PublicUser; csrfToken: string; mfaEnabled: boolean }
+interface RegistrationResult {
+  user: PublicUser;
+  emailDelivery: { delivered: boolean; reason?: string; messageId?: string };
+}
 interface RegisterInput {
   username: string; email: string; password: string; displayName?: string;
   country?: string; countryShared?: boolean; timezone?: string; timezoneShared?: boolean;
@@ -15,7 +19,7 @@ interface AuthValue {
   csrfToken: string;
   refresh: () => Promise<void>;
   login: (email: string, password: string, mfaCode?: string) => Promise<PublicUser>;
-  register: (input: RegisterInput) => Promise<PublicUser>;
+  register: (input: RegisterInput) => Promise<RegistrationResult>;
   logout: () => Promise<void>;
   setMfaEnabled: (value: boolean) => void;
 }
@@ -50,11 +54,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return session.user;
   }, [refresh]);
 
-  const register = useCallback(async (input: RegisterInput) => {
-    const result = await api<{ user: PublicUser; csrfToken: string }>('/auth/register', { method: 'POST', body: input });
+  const register = useCallback(async (input: RegisterInput): Promise<RegistrationResult> => {
+    const result = await api<RegistrationResult & { csrfToken: string }>('/auth/register', { method: 'POST', body: input });
     setUser(result.user); setCsrfToken(result.csrfToken);
     await refresh();
-    return result.user;
+    return { user: result.user, emailDelivery: result.emailDelivery };
   }, [refresh]);
 
   const logout = useCallback(async () => {

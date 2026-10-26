@@ -76,7 +76,13 @@ export function AuthPage() {
           timezone: browserTimeZone(), timezoneShared,
           accountCurrency: 'USD',
         });
-        toast.success('Account created', result.emailVerified ? 'Your email is verified.' : 'Check your inbox and verify your email from Settings.');
+        if (result.user.emailVerified) {
+          toast.success('Account created', 'Your email is verified.');
+        } else if (result.emailDelivery.delivered) {
+          toast.success('Account created', 'The verification email was accepted by the SMTP server. Check your inbox and spam folder.');
+        } else {
+          toast.info('Account created — verification email not delivered', `${result.emailDelivery.reason ?? 'The SMTP server did not accept the message.'} You can retry from Settings.`);
+        }
         navigate(next, { replace: true });
       } else if (mode === 'forgot') {
         const result = await api<{ delivered: boolean; devResetToken?: string; reason?: string }>('/auth/forgot', { method: 'POST', body: { email } });

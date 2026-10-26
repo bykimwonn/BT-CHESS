@@ -75,6 +75,21 @@ export function SettingsPage() {
     finally { setBusy(false); }
   };
 
+  const sendVerificationEmail = async () => {
+    setBusy(true);
+    try {
+      const result = await api<{ delivered: boolean; reason?: string }>('/auth/email-verification/send', {
+        method: 'POST', body: {},
+      });
+      if (result.delivered) {
+        toast.success('Verification email accepted', 'The SMTP server accepted the message. Check the inbox and spam folder.');
+      } else {
+        toast.error('Verification email not delivered', result.reason ?? 'The SMTP server did not accept the message.');
+      }
+    } catch (error) { toast.error('Email unavailable', errorMessage(error)); }
+    finally { setBusy(false); }
+  };
+
   const changePassword = async () => {
     if (password.next !== password.confirm) { toast.error('Passwords do not match'); return; }
     setBusy(true);
@@ -153,7 +168,7 @@ export function SettingsPage() {
           <div className="stack" style={{ gap: '.5rem' }}>
             <div className="alert"><strong>Email:</strong> {user?.emailVerified ? 'verified' : 'not verified'}</div>
             <div className="alert"><strong>18+ age check:</strong> {user?.ageVerified ? 'verified by provider' : 'not verified'}</div>
-            <button className="btn btn-sm" onClick={() => void api('/auth/email-verification/send', { method: 'POST', body: {} }).then(() => toast.success('Verification email sent')).catch((e) => toast.error('Email unavailable', errorMessage(e)))}>Send verification email</button>
+            <button className="btn btn-sm" disabled={busy} onClick={() => void sendVerificationEmail()}>Send verification email</button>
             <p className="tiny muted" style={{ marginBottom: 0 }}>Real-money competitions require provider-verified 18+ status. A self-declared birth date is not sufficient.</p>
           </div>
         </aside>

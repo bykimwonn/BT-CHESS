@@ -14,7 +14,7 @@ import type { AppContext } from '../services/context.js';
 import { audit } from '../services/audit.js';
 import { AppError, badRequest, forbidden, notFound, unauthorized } from '../services/errors.js';
 import { uuid } from '../services/ids.js';
-import { findSession, requireAdmin, requireAuth, requireCsrf, type AuthedRequest } from '../auth/session.js';
+import { findSession, requireAdmin, requireAgent, requireAuth, requireCsrf, type AuthedRequest } from '../auth/session.js';
 import { validFen } from '../games/rules.js';
 import type { GameEvents } from '../games/service.js';
 import { ProviderError } from '../payments/types.js';
@@ -56,6 +56,36 @@ const adminActionSchema = z.object({
   confirm: z.literal(true), reason: z.string().trim().min(8).max(500),
   mfaCode: z.string().regex(/^\d{6}$/).optional(),
 });
+// ------------------------------------------------------- cash-agent vouchers
+const voucherIssueSchema = z.object({
+  amountCents: z.number().int().min(100).max(10_000_000),
+  playerUsername: z.string().trim().min(1).max(200).optional(),
+  reference: z.string().trim().max(120).optional(),
+  expiresMinutes: z.number().int().min(5).max(1440).optional(),
+});
+const voucherCodeSchema = z.object({
+  code: z.string().trim().min(4).max(24),
+  reference: z.string().trim().max(120).optional(),
+});
+const cashPayoutSchema = z.object({
+  amountCents: z.number().int().min(500).max(10_000_000),
+  agentCode: z.string().trim().min(3).max(12),
+});
+const cashAgentCreateSchema = adminActionSchema.extend({
+  usernameOrEmail: z.string().trim().min(3).max(200),
+  code: z.string().trim().min(3).max(12),
+  name: z.string().trim().min(2).max(120),
+  location: z.string().trim().max(160).optional(),
+  voucherLimitCents: z.number().int().min(100).max(100_000_000).optional(),
+  dailyDepositLimitCents: z.number().int().min(100).max(100_000_000).optional(),
+  dailyPayoutLimitCents: z.number().int().min(100).max(100_000_000).optional(),
+});
+const cashAgentStatusSchema = adminActionSchema.extend({ status: z.enum(['active', 'suspended', 'closed']) });
+const cashRemitSchema = adminActionSchema.extend({
+  amountCents: z.number().int().min(1).max(100_000_000),
+  reference: z.string().trim().min(2).max(120),
+});
+const cashCancelSchema = adminActionSchema.extend({ reason: z.string().trim().min(8).max(500) }).omit({ confirm: true });
 
 export function createApiRouter(ctx: AppContext): Router {
   const router = Router();
@@ -86,6 +116,7 @@ export function createApiRouter(ctx: AppContext): Router {
   const authMiddleware = (req: Request, res: Response, next: NextFunction) => requireAuth(db, req, res, next);
   const csrfMiddleware = (req: Request, res: Response, next: NextFunction) => requireCsrf(db, req, res, next);
   const adminMiddleware = (req: Request, res: Response, next: NextFunction) => requireAdmin(db, req, res, next);
+  const agentMiddleware = (req: Request, res: Response, next: NextFunction) => requireAgent(db, req, res, next);
   const privileged = (req: Request, res: Response, next: NextFunction) => {
     void (async () => {
       const actor = user(req as AuthedRequest);
@@ -101,6 +132,7 @@ export function createApiRouter(ctx: AppContext): Router {
   };
   const protectedRoute = [authMiddleware, csrfMiddleware];
   const adminRoute = [adminMiddleware, privileged, csrfMiddleware];
+  const agentRoute = [agentMiddleware, csrfMiddleware];
 
   // ---------------------------------------------------------------- health
   router.get('/health', wrap(async (_req, res) => {
@@ -494,6 +526,37 @@ export function createApiRouter(ctx: AppContext): Router {
   router.get('/wallet/receipt/:id', protectedRoute, wrap(async (req, res) => {
     res.json(await ctx.payments.receipt(user(req).id, z.string().uuid().parse(req.params.id)));
   }));
+  // -------------------------------------------------------- cash vouchers
+  // Player side: redeem a cash-in code, or request cash and receive a code.
+  router.post('/wallet/vouchers/redeem', protectedRoute, financialLimiter, wrap(async (req, res) => {
+    const input = voucherCodeSchema.parse(req.body);
+    res.json(await ctx.cash.redeemDeposit(user(req).id, input));
+  }));
+  router.get('/wallet/vouchers', protectedRoute, wrap(async (req, res) => {
+    res.json({ items: await ctx.cash.vouchersForPlayer(user(req).id) });
+  }));
+  router.post('/wallet/cash-out', protectedRoute, financialLimiter, wrap(async (req, res) => {
+    const input = cashPayoutSchema.parse(req.body);
+    const result = await ctx.cash.requestPayout(user(req).id, input);
+    res.status(201).json(result);
+  }));
+
+  // Agent console.
+  router.get('/cash/agent', agentRoute, wrap(async (req, res) => res.json(await ctx.cash.agentDashboard(user(req).id))));
+  router.post('/cash/agent/vouchers', agentRoute, financialLimiter, wrap(async (req, res) => {
+    const input = voucherIssueSchema.parse(req.body);
+    res.status(201).json(await ctx.cash.issueDeposit(user(req).id, input));
+  }));
+  router.post('/cash/agent/payouts/settle', agentRoute, financialLimiter, wrap(async (req, res) => {
+    const input = voucherCodeSchema.parse(req.body);
+    res.json(await ctx.cash.settlePayout(user(req).id, input));
+  }));
+  router.post('/cash/agent/vouchers/:id/cancel', agentRoute, wrap(async (req, res) => {
+    const input = cashCancelSchema.parse(req.body);
+    const role = user(req).role === 'admin' ? 'admin' : 'agent';
+    res.json(await ctx.cash.cancelVoucher(user(req).id, role, z.string().uuid().parse(req.params.id), input.reason));
+  }));
+
   router.get('/wallet/deposits', protectedRoute, wrap(async (req, res) => {
     res.json({ items: await ctx.payments.listDeposits(user(req).id) });
   }));
@@ -694,6 +757,27 @@ export function createApiRouter(ctx: AppContext): Router {
   router.get('/admin/settlements', adminRoute, wrap(async (req, res) => res.json({ items: await ctx.admin.settlements(intParam(req.query.limit, 100, 500)) })));
   router.get('/admin/deposits', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.admin.deposits() })));
   router.get('/admin/withdrawals', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.admin.withdrawals() })));
+  router.get('/admin/cash-agents', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.cash.agents() })));
+  router.post('/admin/cash-agents', adminRoute, wrap(async (req, res) => {
+    const input = cashAgentCreateSchema.parse(req.body);
+    res.status(201).json(await ctx.cash.registerAgent(user(req).id, { ...input, reason: input.reason }));
+  }));
+  router.post('/admin/cash-agents/:id/status', adminRoute, wrap(async (req, res) => {
+    const input = cashAgentStatusSchema.parse(req.body);
+    await ctx.cash.setAgentStatus(user(req).id, z.string().uuid().parse(req.params.id), input.status, input.reason);
+    res.json({ ok: true });
+  }));
+  router.post('/admin/cash-agents/:id/remit', adminRoute, wrap(async (req, res) => {
+    const input = cashRemitSchema.parse(req.body);
+    res.json(await ctx.cash.remit(user(req).id, z.string().uuid().parse(req.params.id), { ...input, reason: input.reason }));
+  }));
+  router.get('/admin/cash-vouchers', adminRoute, wrap(async (req, res) => {
+    res.json({ items: await ctx.cash.allVouchers(intParam(req.query.limit, 100, 500)) });
+  }));
+  router.post('/admin/cash-vouchers/:id/cancel', adminRoute, wrap(async (req, res) => {
+    const input = cashCancelSchema.parse(req.body);
+    res.json(await ctx.cash.cancelVoucher(user(req).id, 'admin', z.string().uuid().parse(req.params.id), input.reason));
+  }));
   router.get('/admin/provider-events', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.admin.providerEvents() })));
   router.get('/admin/providers', adminRoute, wrap(async (_req, res) => res.json({ providers: ctx.payments.health(), docs: ctx.payments.docs() })));
   router.get('/admin/email', adminRoute, wrap(async (_req, res) => res.json(await ctx.admin.emailStatus())));

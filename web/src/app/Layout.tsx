@@ -122,6 +122,7 @@ export function Layout() {
                     <Link className="nav-link" to="/history"><Icon name="clock" size={16} /> Game history</Link>
                     <Link className="nav-link" to="/wallet"><Icon name="wallet" size={16} /> Wallet</Link>
                     <Link className="nav-link" to="/settings"><Icon name="settings" size={16} /> Settings</Link>
+                    {(user.role === 'agent' || user.role === 'admin') && <Link className="nav-link" to="/agent"><Icon name="wallet" size={16} /> Agent</Link>}
                     {user.role === 'admin' && <Link className="nav-link" to="/admin"><Icon name="shield" size={16} /> Admin</Link>}
                     <button className="nav-link" style={{ width: '100%', border: 0, background: 'transparent', textAlign: 'left' }}
                       onClick={() => void logout().then(() => navigate('/'))}>Log out</button>
@@ -144,6 +145,7 @@ export function Layout() {
             {NAV.map((item) => <NavLink key={item.to} to={item.to} className="nav-link"><Icon name={item.icon} size={16} />{item.label}</NavLink>)}
             <Link className="nav-link" to="/wallet"><Icon name="wallet" size={16} />Wallet</Link>
             <Link className="nav-link" to="/help"><Icon name="help" size={16} />Help</Link>
+            {(user?.role === 'agent' || user?.role === 'admin') && <Link className="nav-link" to="/agent"><Icon name="wallet" size={16} />Agent</Link>}
             {user?.role === 'admin' && <Link className="nav-link" to="/admin"><Icon name="shield" size={16} />Admin</Link>}
           </div>
         )}

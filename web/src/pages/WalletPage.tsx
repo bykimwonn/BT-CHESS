@@ -20,6 +20,9 @@ export function WalletPage() {
   const [deposit, setDeposit] = useState({ provider: 'paynow', amount: '100', phone: '' });
   const [withdrawal, setWithdrawal] = useState({ provider: 'ecocash', amount: '100', destination: '' });
   const [testAmount, setTestAmount] = useState('500');
+  const [voucher, setVoucher] = useState({ code: '', reference: '' });
+  const [cashOut, setCashOut] = useState({ amount: '20', agentCode: '' });
+  const [issuedCode, setIssuedCode] = useState<{ code: string; amountCents: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [activeOperation, setActiveOperation] = useState<PaymentOperation | null>(null);
   const [receipt, setReceipt] = useState<{ transaction: LedgerRow; entries: Array<{ line_no: number; amount_cents: number; owner_type: string; purpose: string }> } | null>(null);
@@ -39,6 +42,7 @@ export function WalletPage() {
   const transactions = useQuery({ queryKey: ['wallet-transactions', query], queryFn: () => api<{ items: LedgerRow[] }>(`/wallet/transactions?${query}`) });
   const deposits = useQuery({ queryKey: ['wallet-deposits'], queryFn: () => api<{ items: PaymentOperation[] }>('/wallet/deposits') });
   const withdrawals = useQuery({ queryKey: ['wallet-withdrawals'], queryFn: () => api<{ items: PaymentOperation[] }>('/wallet/withdrawals') });
+  const vouchers = useQuery({ queryKey: ['wallet-vouchers'], queryFn: () => api<{ items: Array<Record<string, any>> }>('/wallet/vouchers') });
   const configuredProviders = providers.data?.providers.filter((p) => p.configured) ?? [];
 
   const invalidate = () => {
@@ -46,6 +50,7 @@ export function WalletPage() {
     void queryClient.invalidateQueries({ queryKey: ['wallet-transactions'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet-deposits'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet-withdrawals'] });
+    void queryClient.invalidateQueries({ queryKey: ['wallet-vouchers'] });
   };
 
   const startDeposit = async () => {
@@ -72,6 +77,31 @@ export function WalletPage() {
       toast.info('Withdrawal submitted', 'Funds remain reserved until the provider confirms completion.');
       invalidate();
     } catch (error) { toast.error('Withdrawal could not start', errorMessage(error)); }
+    finally { setBusy(false); }
+  };
+
+  const redeemVoucher = async () => {
+    setBusy(true);
+    try {
+      const result = await api<Record<string, any>>('/wallet/vouchers/redeem', { method: 'POST', body: { code: voucher.code, reference: voucher.reference || undefined } });
+      toast.success('Cash voucher redeemed', `${formatMoney(Number(result.amountCents ?? 0))} was credited by agent ${String(result.agentCode ?? '')}.`);
+      setVoucher({ code: '', reference: '' });
+      invalidate();
+    } catch (error) { toast.error('Voucher could not be redeemed', errorMessage(error)); }
+    finally { setBusy(false); }
+  };
+
+  const requestCashOut = async () => {
+    setBusy(true);
+    try {
+      const result = await api<{ code: string; voucher: Record<string, any> }>('/wallet/cash-out', { method: 'POST', body: {
+        amountCents: Math.round(Number(cashOut.amount) * 100),
+        agentCode: cashOut.agentCode.trim().toUpperCase(),
+      } });
+      setIssuedCode({ code: result.code, amountCents: Number(result.voucher?.amountCents ?? 0) });
+      toast.info('Cash-out code issued', 'Take this code and your ID to the agent. The funds stay reserved until the agent pays you.');
+      invalidate();
+    } catch (error) { toast.error('Cash-out could not start', errorMessage(error)); }
     finally { setBusy(false); }
   };
 
@@ -197,6 +227,41 @@ export function WalletPage() {
               <label className="field"><span className="field-label">Destination</span><input className="input" placeholder="263770000000" value={withdrawal.destination} onChange={(e) => setWithdrawal((w) => ({ ...w, destination: e.target.value }))} /></label>
               <button className="btn btn-block" onClick={() => void startWithdrawal()} disabled={busy || !status.data?.realMoneyEnabled}>Request withdrawal</button>
               {!status.data?.realMoneyEnabled && <div className="tiny muted">Withdrawals are disabled unless authorised real-money mode is active. Test credits are never withdrawable.</div>}
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-header"><h2 className="card-title">Cash at an agent</h2><span className="pill">Voucher code</span></div>
+            <div className="stack">
+              <p className="tiny muted" style={{ marginBottom: 0 }}>Pay cash to a registered agent and redeem the code they print, or request cash and present the code at the agent together with your ID. The agent never handles your password or PIN.</p>
+              <label className="field"><span className="field-label">Cash-in code</span>
+                <input className="input mono" value={voucher.code} onChange={(e) => setVoucher((v) => ({ ...v, code: e.target.value.toUpperCase() }))} placeholder="XXXX-XXXX" autoComplete="off" /></label>
+              <label className="field"><span className="field-label">Receipt reference (optional)</span>
+                <input className="input" value={voucher.reference} onChange={(e) => setVoucher((v) => ({ ...v, reference: e.target.value }))} placeholder="Teller receipt number" /></label>
+              <button className="btn btn-primary btn-block" onClick={() => void redeemVoucher()} disabled={busy || voucher.code.trim().length < 4}>
+                {busy ? <span className="loading" /> : <Icon name="wallet" size={16} />} Redeem cash-in code
+              </button>
+              {status.data?.mode === 'free' && <div className="tiny muted">Cash vouchers are disabled until test or authorised real-money mode is active.</div>}
+              <hr />
+              <label className="field"><span className="field-label">Cash payout amount (USD)</span>
+                <input className="input" type="number" min="5" step="1" value={cashOut.amount} onChange={(e) => setCashOut((c) => ({ ...c, amount: e.target.value }))} /></label>
+              <label className="field"><span className="field-label">Agent code</span>
+                <input className="input mono" value={cashOut.agentCode} onChange={(e) => setCashOut((c) => ({ ...c, agentCode: e.target.value.toUpperCase() }))} placeholder="BTM01" /></label>
+              <button className="btn btn-block" onClick={() => void requestCashOut()} disabled={busy || !status.data?.realMoneyEnabled || cashOut.agentCode.trim().length < 3}>Request cash payout code</button>
+              {!status.data?.realMoneyEnabled && <div className="tiny muted">Cash payouts require authorised real-money mode and completed age/identity verification.</div>}
+              {issuedCode && <div className="alert"><strong>Your cash-out code</strong>
+                <div className="mono" style={{ fontSize: '1.4rem', letterSpacing: '.12em' }}>{issuedCode.code}</div>
+                <div className="small">Show this and your ID to the agent to collect {formatMoney(issuedCode.amountCents)}. It expires in 72 hours.</div></div>}
+              {(vouchers.data?.items.length ?? 0) > 0 && <div className="stack">
+                <span className="field-label">Your recent codes</span>
+                {vouchers.data?.items.slice(0, 5).map((row) => (
+                  <div className="spread tiny" key={String(row.id)}>
+                    <span className="mono">{String(row.kind)} •••{String(row.codeLast4)}</span>
+                    <span>{formatMoney(Number(row.amountCents))}</span>
+                    <span className={`pill ${row.status === 'redeemed' || row.status === 'paid' ? 'pill-success' : row.status === 'issued' ? 'pill-accent' : 'pill-danger'}`}>{String(row.status)}</span>
+                  </div>
+                ))}
+              </div>}
             </div>
           </section>
 

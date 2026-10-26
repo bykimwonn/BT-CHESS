@@ -117,6 +117,17 @@ export async function requireAdmin(db: Database, req: AuthedRequest, _res: Respo
   } catch (error) { next(error); }
 }
 
+/** Agent or administrator: the cash-voucher console is available to both. */
+export async function requireAgent(db: Database, req: AuthedRequest, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = await findSession(db, req.headers);
+    if (!user) throw unauthorized();
+    if (user.role !== 'agent' && user.role !== 'admin') throw forbidden('Cash-agent access required');
+    req.auth = user;
+    next();
+  } catch (error) { next(error); }
+}
+
 export async function requireCsrf(db: Database, req: AuthedRequest, _res: Response, next: NextFunction): Promise<void> {
   try {
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();

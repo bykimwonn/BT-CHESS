@@ -114,6 +114,10 @@ export const env = {
   ageVerificationWebhookSecret: process.env.AGE_VERIFICATION_WEBHOOK_SECRET ?? '',
   testFundsEnabled: bool(process.env.TEST_FUNDS_ENABLED, process.env.OPERATING_MODE === 'test'),
   engineEnabled: bool(process.env.ENGINE_ENABLED, true),
+  // Cash-agent voucher rail (teller cash in / cash out with short codes).
+  // Operational flag only: the rail additionally requires test or authorised
+  // real-money mode, enforced in CashVoucherService.
+  cashAgentsEnabled: bool(process.env.CASH_AGENTS_ENABLED),
   engineMaxConcurrent: int(process.env.ENGINE_MAX_CONCURRENT, 2),
   engineMaxDepth: int(process.env.ENGINE_MAX_DEPTH, 18),
   engineMaxTimeMs: int(process.env.ENGINE_MAX_TIME_MS, 1500),

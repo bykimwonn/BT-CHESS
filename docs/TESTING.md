@@ -27,8 +27,8 @@ npm run test:deploy
 
 | Suite | Runner / result | Count |
 | --- | --- | --- |
-| Unit | `tsx --test tests/unit/*.test.ts` — 34 pass, 0 fail | 34 tests |
-| Integration | `tsx --test tests/integration/*.test.ts` — 24 pass, 0 fail | 24 tests |
+| Unit | `tsx --test tests/unit/*.test.ts` — 70 pass, 0 fail | 70 tests |
+| Integration | `tsx --test tests/integration/*.test.ts` — 27 pass, 0 fail | 27 tests |
 | UI | `vitest run --config vitest.config.ts` — 6 files, 16 pass, 0 fail | 16 tests |
 | Server E2E | `tsx tests/e2e.ts` — `ok: true` | 21 checks |
 | Browser | real Chromium + production bundle — `ok: true` | 43 checks |
@@ -37,7 +37,7 @@ npm run test:deploy
 | Production build | TypeScript server + Vite web bundle | 0 errors |
 | Clean install | `npm ci` in a fresh copy of the repository | exit 0; postinstall vendored GPL Stockfish assets |
 
-Combined: **74 automated test cases**, **72 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
+Combined: **113 automated test cases**, **72 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
 
 The deployment suite runs the exact stale host command `node server.js` against the compiled server and asserts the port opens in well under the 60-second platform scan window (observed: 362 ms bound, 3.1 s ready), that `/api/health` is 200 only when ready and reports its database driver, and that `SIGTERM` shuts down cleanly. It asserts incomplete production configuration keeps the port bound and returns 503 listing every missing setting instead of crash-looping, that `RENDER_EXTERNAL_URL` supplies the public origin when `PUBLIC_ORIGIN` is unset, that a missing build exits 1 with actionable guidance and performs no runtime build, that the install-phase build exists, is idempotent, can be skipped, never breaks a production-only install and is copied into Docker's dependency layer; and that `engines`, `.node-version`, `render.yaml` and `start` stay pinned to the verified runtime.
 
@@ -53,6 +53,7 @@ The deployment suite runs the exact stale host command `node server.js` against 
 - PesePay AES-256-CBC envelope round-trip and 32-byte key validation.
 - Settlement journal lines for winner, draw and void; tampered terms rejected.
 - Compliance activation signature and manifest verification, including independent flags.
+- Cash-voucher code normalisation, look-alike-free generation, hash-only storage and the fail-closed rail gate (`CASH_AGENTS_ENABLED`, free/test/real, payout-only-in-real).
 - International country/timezone helpers, explicit currency formatting and deterministic tournament pairing.
 
 ### Integration
@@ -70,6 +71,8 @@ The deployment suite runs the exact stale host command `node server.js` against 
 - Payment failures, invalid signatures, amount mismatches and duplicate callbacks cannot create fake balances.
 - Currency-specific ledger account isolation, mixed-currency rejection and explicit non-applied conversion quotes.
 - Free international tournament creation, pairing, standings and rating updates without money.
+- Cash-agent cash in and out: agent registration, hashed code issue, redeem-once, float custody, cancellation, limits, sandbox labelling and remittance.
+- Authorised real-mode payouts: hold, settle after ID check, replay rejection, low-float refusal, cancel and expiry release, KYC refusal and journal/float reconciliation.
 
 - Registration failures name the offending field (`Password: Include an uppercase letter`) and return a `fields` map, instead of the previous generic "Invalid request". A hand-built phone-style payload with an unusable time zone (`GMT+02:00`, `""`, `UTC+2`, a number) still registers and stores `UTC`, while explicit Settings edits keep strict IANA validation. Password and username rules are unchanged.
 

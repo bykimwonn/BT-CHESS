@@ -18,6 +18,7 @@ import { HistoryPage } from '../pages/HistoryPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { HelpPage } from '../pages/HelpPage';
 import { AdminPage } from '../pages/AdminPage';
+import { AgentPage } from '../pages/AgentPage';
 import { LegalPage } from '../pages/LegalPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 
@@ -45,6 +46,7 @@ export function App() {
         <Route path="history" element={<RequireAuth><HistoryPage /></RequireAuth>} />
         <Route path="settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
         <Route path="admin" element={<RequireAuth admin><AdminPage /></RequireAuth>} />
+        <Route path="agent" element={<RequireAuth agent><AgentPage /></RequireAuth>} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

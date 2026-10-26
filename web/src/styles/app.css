@@ -209,7 +209,8 @@ p { margin: 0 0 1rem; }
 .field { display: flex; flex-direction: column; gap: .35rem; }
 .field label, .field-label { font-size: .82rem; font-weight: 750; color: var(--text-soft); }
 .field-hint { font-size: .75rem; color: var(--text-muted); }
-.field-error { font-size: .78rem; color: var(--danger); }
+.field-error { font-size: .78rem; color: var(--danger); font-weight: 600; }
+.input[aria-invalid="true"], .select[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
 .checkbox { display: flex; align-items: flex-start; gap: .6rem; font-size: .88rem; }
 .checkbox input { margin-top: .25rem; accent-color: var(--teal); }
 .segmented { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); gap: 2px; flex-wrap: wrap; }

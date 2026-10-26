@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError, errorMessage } from '../lib/api';
+import { firstFieldError, validateRegistration, type FieldErrors } from '../lib/registerValidation';
 import { useAuth } from '../app/AuthProvider';
 import { useToast } from '../app/ToastProvider';
 import { Icon } from '../components/Icon';
@@ -36,12 +37,22 @@ export function AuthPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [devToken, setDevToken] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const { login, register } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const score = useMemo(() => passwordScore(password), [password]);
 
-  const switchMode = (value: Mode) => { setMode(value); setNotice(null); setDevToken(null); setMfaRequired(false); };
+  const switchMode = (value: Mode) => {
+    setMode(value); setNotice(null); setDevToken(null); setMfaRequired(false); setFieldErrors({});
+  };
+
+  const clearFieldError = (field: string) => setFieldErrors((current) => {
+    if (!current[field]) return current;
+    const next = { ...current };
+    delete next[field];
+    return next;
+  });
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -52,8 +63,13 @@ export function AuthPage() {
         toast.success('Welcome back', 'Your secure session is active.');
         navigate(next, { replace: true });
       } else if (mode === 'register') {
-        if (password !== confirmPassword) throw new Error('Passwords do not match');
-        if (!acceptTerms) throw new Error('Please accept the terms and privacy notice');
+        const problems = validateRegistration({ username, email, password, confirmPassword, acceptTerms });
+        if (Object.keys(problems).length) {
+          setFieldErrors(problems);
+          toast.error('Could not continue', firstFieldError(problems) ?? 'Check the highlighted fields');
+          return;
+        }
+        setFieldErrors({});
         const result = await register({
           username, email, password, displayName: displayName || username,
           country, countryShared: countryShared && country !== 'ZZ',
@@ -82,6 +98,11 @@ export function AuthPage() {
         setMfaRequired(true);
         setNotice('Enter the six-digit code from your authenticator app.');
       } else {
+        // Server-side field errors (for example a rule this client copy does not
+        // yet know about) are shown next to the input that needs changing.
+        if (error instanceof ApiError && error.code === 'validation_error' && error.fields) {
+          setFieldErrors(error.fields);
+        }
         toast.error('Could not continue', errorMessage(error));
       }
     } finally { setBusy(false); }
@@ -114,14 +135,27 @@ export function AuthPage() {
           {(mode === 'login' || mode === 'register' || mode === 'forgot') && (
             <label className="field">
               <span className="field-label">Email address</span>
-              <input className="input" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+              <input className="input" type="email" autoComplete="email" inputMode="email"
+                autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                required value={email}
+                aria-invalid={fieldErrors.email ? true : undefined}
+                aria-describedby={fieldErrors.email ? 'email-error' : undefined}
+                onChange={(e) => { setEmail(e.target.value); clearFieldError('email'); }}
+                placeholder="you@example.com" />
+              {fieldErrors.email && <span className="field-error" id="email-error" role="alert">{fieldErrors.email}</span>}
             </label>
           )}
           {mode === 'register' && (
             <>
               <label className="field"><span className="field-label">Username</span>
-                <input className="input" required minLength={3} maxLength={24} pattern="[a-zA-Z][a-zA-Z0-9_]+" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="QueensGambit" />
-                <span className="field-hint">3–24 letters, numbers or underscores; must start with a letter.</span>
+                <input className="input" required minLength={3} maxLength={24} pattern="[a-zA-Z][a-zA-Z0-9_]+"
+                  autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                  value={username}
+                  aria-invalid={fieldErrors.username ? true : undefined}
+                  aria-describedby={fieldErrors.username ? 'username-error' : 'username-hint'}
+                  onChange={(e) => { setUsername(e.target.value); clearFieldError('username'); }} placeholder="QueensGambit" />
+                <span className="field-hint" id="username-hint">3–24 letters, numbers or underscores; must start with a letter.</span>
+                {fieldErrors.username && <span className="field-error" id="username-error" role="alert">{fieldErrors.username}</span>}
               </label>
               <label className="field"><span className="field-label">Display name (optional)</span>
                 <input className="input" maxLength={48} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="How others see you" />
@@ -142,7 +176,12 @@ export function AuthPage() {
             <label className="field">
               <span className="field-label">{mode === 'reset' ? 'New password' : 'Password'}</span>
               <input className="input" type="password" required minLength={mode === 'login' ? 1 : 10} autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 10 characters" />
+                autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                value={password}
+                aria-invalid={fieldErrors.password ? true : undefined}
+                aria-describedby={fieldErrors.password ? 'password-error' : undefined}
+                onChange={(e) => { setPassword(e.target.value); clearFieldError('password'); }} placeholder="At least 10 characters" />
+              {fieldErrors.password && <span className="field-error" id="password-error" role="alert">{fieldErrors.password}</span>}
               {mode !== 'login' && <>
                 <div className="password-meter" aria-label={`Password strength ${score} of 5`}>{[1, 2, 3, 4, 5].map((n) => <span key={n} className={score >= n ? 'filled' : ''} />)}</div>
                 <span className="field-hint">Use 10+ characters with uppercase, lowercase and a number.</span>
@@ -151,7 +190,13 @@ export function AuthPage() {
           )}
           {mode === 'register' && (
             <label className="field"><span className="field-label">Confirm password</span>
-              <input className="input" type="password" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+              <input className="input" type="password" required
+                autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                value={confirmPassword}
+                aria-invalid={fieldErrors.confirmPassword ? true : undefined}
+                aria-describedby={fieldErrors.confirmPassword ? 'confirm-password-error' : undefined}
+                onChange={(e) => { setConfirmPassword(e.target.value); clearFieldError('confirmPassword'); }} />
+              {fieldErrors.confirmPassword && <span className="field-error" id="confirm-password-error" role="alert">{fieldErrors.confirmPassword}</span>}
             </label>
           )}
           {mfaRequired && mode === 'login' && (
@@ -161,8 +206,13 @@ export function AuthPage() {
             </label>
           )}
           {mode === 'register' && (
-            <label className="checkbox"><input type="checkbox" aria-label="Accept terms" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} required />
-              <span>I accept the terms, privacy notice and responsible-play policy. I confirm I am old enough to use this service in my jurisdiction.</span></label>
+            <>
+              <label className="checkbox"><input type="checkbox" aria-label="Accept terms" checked={acceptTerms}
+                aria-invalid={fieldErrors.acceptTerms ? true : undefined}
+                onChange={(e) => { setAcceptTerms(e.target.checked); clearFieldError('acceptTerms'); }} required />
+                <span>I accept the terms, privacy notice and responsible-play policy. I confirm I am old enough to use this service in my jurisdiction.</span></label>
+              {fieldErrors.acceptTerms && <span className="field-error" role="alert">{fieldErrors.acceptTerms}</span>}
+            </>
           )}
           {notice && <div className="alert alert-success">{notice}</div>}
           {devToken && (

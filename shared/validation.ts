@@ -2,10 +2,19 @@ import { z } from 'zod';
 import { TIME_PRESETS, isStakeAllowed, type TimeCategory } from './contracts.js';
 import { UNDISCLOSED_COUNTRY, isValidTimeZone, normalizeCountryCode } from './countries.js';
 
-export const usernameSchema = z.string().trim().min(3).max(24)
-  .regex(/^[a-zA-Z][a-zA-Z0-9_]+$/, 'Use 3–24 letters, numbers or underscores, starting with a letter');
-export const emailSchema = z.string().trim().toLowerCase().email().max(254);
-export const passwordSchema = z.string().min(10).max(128)
+// Messages are shown verbatim next to the offending field, so they are written
+// for the person typing rather than as developer diagnostics.
+export const usernameSchema = z.string().trim()
+  .min(3, 'Use at least 3 characters')
+  .max(24, 'Use at most 24 characters')
+  .regex(/^[a-zA-Z][a-zA-Z0-9_]+$/, 'Use letters, numbers or underscores only, starting with a letter (no spaces)');
+export const emailSchema = z.string().trim().toLowerCase()
+  .min(3, 'Enter your email address')
+  .max(254, 'That email address is too long')
+  .email('Enter a valid email address, for example you@example.com');
+export const passwordSchema = z.string()
+  .min(10, 'Use at least 10 characters')
+  .max(128, 'Use at most 128 characters')
   .regex(/[a-z]/, 'Include a lowercase letter')
   .regex(/[A-Z]/, 'Include an uppercase letter')
   .regex(/[0-9]/, 'Include a number');
@@ -15,6 +24,21 @@ export const countrySchema = z.string().trim().toUpperCase()
 export const timezoneSchema = z.string().trim().min(1).max(80).refine(isValidTimeZone, 'Choose a valid IANA time zone');
 export const currencySchema = z.enum(['USD']);
 
+/**
+ * Time zones arrive from `Intl.DateTimeFormat().resolvedOptions().timeZone`.
+ * Most browsers return a real IANA name, but some mobile browsers and older
+ * Android WebViews return identifiers `Intl` itself rejects (for example
+ * `GMT+02:00`, an empty string, or a locale-style name). A display preference is
+ * never a reason to reject a signup, so an unusable value falls back to UTC; the
+ * user can correct it later in Settings.
+ */
+export const registrationTimeZoneSchema = z.string().max(200).optional()
+  .catch('UTC')
+  .transform((value) => {
+    const candidate = (value ?? '').trim();
+    return candidate && isValidTimeZone(candidate) ? candidate : 'UTC';
+  });
+
 export const registerSchema = z.object({
   username: usernameSchema,
   email: emailSchema,
@@ -23,7 +47,7 @@ export const registerSchema = z.object({
   birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional(),
   country: countrySchema.default(UNDISCLOSED_COUNTRY),
   countryShared: z.boolean().default(false),
-  timezone: timezoneSchema.default('UTC'),
+  timezone: registrationTimeZoneSchema,
   timezoneShared: z.boolean().default(false),
   accountCurrency: currencySchema.default('USD'),
 }).refine((data) => data.country !== UNDISCLOSED_COUNTRY || !data.countryShared,

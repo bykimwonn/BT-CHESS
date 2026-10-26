@@ -19,6 +19,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let checks = 0;
 const pageErrors = [];
 const consoleMessages = [];
+const expectedRestartNoise = [];
+let restartInProgress = false;
 function check(name, condition, detail) {
   if (!condition) throw new Error(`FAILED: ${name}${detail === undefined ? '' : ` — ${JSON.stringify(detail)}`}`);
   checks++;
@@ -152,7 +154,19 @@ async function run() {
       page.on('console', (message) => {
         const text = message.text();
         consoleMessages.push(`${label}:${message.type()}: ${text}`.slice(0, 500));
-        if (message.type() === 'error' && !/Failed to load resource|ERR_CONNECTION_REFUSED/.test(text)) pageErrors.push(`${label} console: ${text}`);
+        if (message.type() !== 'error') return;
+        if (/Failed to load resource|ERR_CONNECTION_REFUSED/.test(text)) return;
+        // This suite deliberately kills and restarts the API. A socket that is
+        // reconnecting while the process boots receives a 503 from the startup
+        // responder; that is the expected consequence of our own action, and it
+        // is recorded rather than discarded. The window is closed again as soon
+        // as the restarted server is serving, and recovery is proven below by a
+        // real move exchange over Socket.IO.
+        if (restartInProgress && /WebSocket|socket\.io|Unexpected response code: 503|net::ERR_CONNECTION/.test(text)) {
+          expectedRestartNoise.push(`${label} console: ${text}`.slice(0, 300));
+          return;
+        }
+        pageErrors.push(`${label} console: ${text}`);
       });
     }
 
@@ -252,13 +266,19 @@ async function run() {
     await blackPage.locator('.move-list').getByText('e4', { exact: true }).waitFor({ timeout: 15_000 });
     await playMove(blackPage, 'e7', 'e5');
     await whitePage.locator('.move-list').getByText('e5', { exact: true }).waitFor({ timeout: 15_000 });
-    check('two legal moves synchronised through Socket.IO in real browsers', true);
+    const moveListAfterTwoMoves = await whitePage.locator('.move-list').innerText();
+    check('two legal moves synchronised through Socket.IO in real browsers',
+      /e4/.test(moveListAfterTwoMoves) && /e5/.test(moveListAfterTwoMoves), { moveListAfterTwoMoves });
     const localA = await pageA.getByTestId('viewer-local-time').innerText();
     const localB = await pageB.getByTestId('viewer-local-time').innerText();
     check('players in different timezones see correct local timestamps', localA !== localB, { localA, localB });
+    const fenBeforeReload = await whitePage.locator('input[aria-label="Forsyth-Edwards Notation"]').inputValue();
     await whitePage.reload({ waitUntil: 'domcontentloaded' });
     await whitePage.locator('.move-list').getByText('e5', { exact: true }).waitFor({ timeout: 15_000 });
-    check('reconnection restores authoritative game state', true);
+    const fenAfterReload = await whitePage.locator('input[aria-label="Forsyth-Edwards Notation"]').inputValue();
+    check('reconnection restores authoritative game state',
+      fenBeforeReload === fenAfterReload && / e4 e5|1\. e4 e5/.test(await whitePage.locator('textarea[aria-label="Portable Game Notation"]').inputValue()),
+      { fenBeforeReload, fenAfterReload });
 
     const pgn = await whitePage.locator('textarea[aria-label="Portable Game Notation"]').inputValue();
     const fen = await whitePage.locator('input[aria-label="Forsyth-Edwards Notation"]').inputValue();
@@ -318,6 +338,7 @@ async function run() {
 
     // Restart the API process against the same database and verify persistence
     // through the browser session without recreating any data.
+    restartInProgress = true;
     await stopServer(server);
     server = startServer(port, dataDir);
     await waitForHealth(base);
@@ -326,8 +347,22 @@ async function run() {
     const restartedPgn = await pageA.locator('textarea[aria-label="Portable Game Notation"]').inputValue();
     check('game history survived a real API process restart', restartedPgn.includes('1. e4 e5'), restartedPgn);
 
+    // Persisted data could come from any cached render. A further move must
+    // travel through a fresh Socket.IO connection to prove the realtime layer
+    // recovered, and both pages must show it.
+    await whitePage.goto(`${base}/game/${gameId}`, { waitUntil: 'domcontentloaded' });
+    await blackPage.goto(`${base}/game/${gameId}`, { waitUntil: 'domcontentloaded' });
+    await whitePage.locator('.move-list').getByText('e5', { exact: true }).waitFor({ timeout: 15_000 });
+    await blackPage.locator('.move-list').getByText('e5', { exact: true }).waitFor({ timeout: 15_000 });
+    restartInProgress = false;
+    await playMove(whitePage, 'g1', 'f3');
+    await blackPage.locator('.move-list').getByText('Nf3', { exact: true }).waitFor({ timeout: 20_000 });
+    const postRestartMoves = await blackPage.locator('.move-list').innerText();
+    check('moves still synchronise over Socket.IO after a real API restart', /Nf3/.test(postRestartMoves), { postRestartMoves });
+
     check('no uncaught browser page errors during the journey', pageErrors.length === 0, pageErrors);
-    console.log(JSON.stringify({ ok: true, checks, gameId, port, pageErrors }, null, 2));
+    console.log(JSON.stringify({ ok: true, checks, gameId, port, pageErrors, expectedRestartNoise, restartWindowOpen: restartInProgress }, null, 2));
+    if (restartInProgress) throw new Error('restart window was left open');
   } catch (error) {
     console.error(error);
     console.error(JSON.stringify({ ok: false, checks, pageErrors, serverLogs: server?.logs?.() ?? null }, null, 2));

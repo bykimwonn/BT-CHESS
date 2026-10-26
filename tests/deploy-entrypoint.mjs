@@ -14,8 +14,8 @@
  */
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -225,6 +225,52 @@ try {
   assert.equal(unreachableExit.code, 1, 'infrastructure failure must exit non-zero for a platform restart');
   assert.match(unreachable.log, /failed during startup/i);
   results.push('unreachable database exits 1 (platform restart) instead of holding a dead port');
+
+  // -------------------------------------------------------------------------
+  // 3c. The build must happen during install, because a host may keep its
+  //     default `npm install` build command and never run `npm run build`.
+  // -------------------------------------------------------------------------
+  const pkgScripts = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).scripts;
+  assert.match(pkgScripts.postinstall, /vendor-engine\.mjs && node scripts\/build-if-needed\.mjs/,
+    'postinstall must vendor the engine and then build');
+
+  const buildIfNeeded = path.join(root, 'scripts', 'build-if-needed.mjs');
+  assert.ok(existsSync(buildIfNeeded), 'scripts/build-if-needed.mjs must exist');
+
+  // Idempotent: with artifacts present it must not rebuild.
+  const skipRun = spawnSync(process.execPath, [buildIfNeeded], { cwd: root, encoding: 'utf8' });
+  assert.equal(skipRun.status, 0);
+  assert.match(skipRun.stdout, /artifacts are already present; skipping/);
+
+  // Opt-out for hosts that run an explicit build.
+  const optedOut = spawnSync(process.execPath, [buildIfNeeded], { cwd: root, env: { ...process.env, ROOKSTONE_SKIP_BUILD: '1' }, encoding: 'utf8' });
+  assert.equal(optedOut.status, 0);
+  assert.match(optedOut.stdout, /ROOKSTONE_SKIP_BUILD=1/);
+
+  // Docker copies only scripts before `npm ci`: no sources yet, must not fail.
+  const scriptOnly = mkdtempSync(path.join(os.tmpdir(), 'rookstone-scripts-'));
+  mkdirSync(path.join(scriptOnly, 'scripts'), { recursive: true });
+  copyFileSync(buildIfNeeded, path.join(scriptOnly, 'scripts', 'build-if-needed.mjs'));
+  const noSources = spawnSync(process.execPath, [path.join(scriptOnly, 'scripts', 'build-if-needed.mjs')], { cwd: scriptOnly, encoding: 'utf8' });
+  assert.equal(noSources.status, 0, 'install must not fail when sources are absent');
+  assert.match(noSources.stdout, /sources are not present yet/);
+
+  // A production-only install has no compiler: warn, do not break the install.
+  const noToolchain = mkdtempSync(path.join(os.tmpdir(), 'rookstone-notool-'));
+  mkdirSync(path.join(noToolchain, 'scripts'), { recursive: true });
+  mkdirSync(path.join(noToolchain, 'server'), { recursive: true });
+  writeFileSync(path.join(noToolchain, 'server', 'index.ts'), 'export {};\n');
+  copyFileSync(buildIfNeeded, path.join(noToolchain, 'scripts', 'build-if-needed.mjs'));
+  const noCompiler = spawnSync(process.execPath, [path.join(noToolchain, 'scripts', 'build-if-needed.mjs')], { cwd: noToolchain, encoding: 'utf8' });
+  assert.equal(noCompiler.status, 0, 'a devDependency-free install must not fail');
+  assert.match(noCompiler.stderr, /Build tools \(typescript, vite\) are not installed/);
+  assert.match(noCompiler.stderr, /npm ci --include=dev && npm run build/);
+
+  // The Docker dependency layer must carry the script it now invokes.
+  const dockerfile = readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /COPY scripts\/build-if-needed\.mjs/, 'Dockerfile must copy the build script before npm ci');
+
+  results.push('install-phase build present, idempotent, opt-out and toolchain-less installs stay green');
 
   // -------------------------------------------------------------------------
   // 4. Runtime and start command stay pinned to what was verified.

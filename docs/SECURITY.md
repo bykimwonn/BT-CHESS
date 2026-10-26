@@ -16,6 +16,14 @@
 - Socket.IO handshakes require an allowed `Origin` and a valid session cookie; no token is accepted from a query string.
 - Webhook endpoints are exempt from CSRF but use provider-specific hash/HMAC/header verification.
 
+## Dependencies
+
+- All dependency versions are pinned exactly in `package.json` plus the committed lockfile; `npm ci` is used everywhere.
+- `npm audit` reports **0 vulnerabilities** (0 critical, 0 high, 0 moderate) as of the current lockfile. This required patch updates to `express` (4.22.3), `react-router-dom` (7.18.4), `vite` (7.3.7), `vitest` (5.0.5), `concurrently` (9.2.5), `nodemailer` (10.2.1) and an override pinning `proxy-addr` to 2.0.8. The `proxy-addr` fix matters here: it corrects IP spoofing through IPv4-mapped IPv6 when a trust subnet is configured, which would otherwise undermine `TRUST_PROXY` and therefore rate limiting.
+- Dev-only tooling is excluded from the runtime image (`npm prune --omit=dev`), so a test-runner advisory cannot reach production.
+- The Stockfish WASM build is vendored from the pinned `stockfish@19.0.1` package by `scripts/vendor-engine.mjs`; its GPL-3.0-or-later text ships in `docs/licenses/`.
+- No credential, secret or signed activation artifact is committed; `.gitignore` covers `.env*`, `config/compliance-activation.json` and `config/*.key`.
+
 ## Rate limiting and abuse controls
 
 - Global, auth, financial and analysis rate limiters are applied at the HTTP layer.

@@ -3,8 +3,11 @@ FROM node:22.22-bookworm-slim AS build
 WORKDIR /app
 ENV NODE_ENV=development
 COPY package.json package-lock.json ./
-# postinstall vendors the GPL Stockfish distribution; copy that script first.
+# postinstall vendors the GPL Stockfish distribution; copy those scripts first.
+# build-if-needed.mjs finds no server/ sources in this layer and skips, then the
+# explicit build below compiles against the full source tree.
 COPY scripts/vendor-engine.mjs ./scripts/vendor-engine.mjs
+COPY scripts/build-if-needed.mjs ./scripts/build-if-needed.mjs
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev

@@ -42,7 +42,7 @@ npm run build
 npm start
 ```
 
-`npm start` serves `dist/web` and `dist-server/server/index.js`. Run it from the repository root so migration paths and static assets resolve correctly. The server binds `PORT` before migrations and engine checks, so platform port scans and health checks succeed even on a cold start. A `server.js` compatibility entrypoint also exists for hosts whose dashboard still runs the older `node server.js` command; it launches the same compiled server and prints actionable guidance if the build is missing. It never builds at runtime.
+`npm start` serves `dist/web` and `dist-server/server/index.js`. Run it from the repository root so migration paths and static assets resolve correctly. The server binds `PORT` before migrations and engine checks, so platform port scans and health checks succeed even on a cold start. `postinstall` compiles the application during dependency installation, so a host whose build command is still the default `npm install` produces `dist-server/` and `dist/web/` anyway. A `server.js` compatibility entrypoint also exists for hosts whose dashboard still runs the older `node server.js` command; it launches the same compiled server and prints actionable guidance if the build is missing. It never builds at runtime.
 
 Create an initial administrator (set strong values in your shell, not in Git):
 
@@ -74,7 +74,7 @@ npm test
 | UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, theme, dialogs, quote disclosure |
 | Server E2E | `npm run test:e2e` | two authenticated Socket.IO clients, duplicate/stale moves, PGN, ratings, wallet, persistence across restart |
 | Browser | `npm run test:browser` | real npm-packaged Chromium: free/money mode choice, two users in different timezones, private invitations, reconnection, engine WASM, RBAC, wallet, mobile overflow, restart |
-| Deployment | `npm run test:deploy` | port bound inside the platform scan window, stale `node server.js` command, health gating, clean shutdown, missing-build guidance, fail-closed configuration, platform origin, pinned Node runtime |
+| Deployment | `npm run test:deploy` | port bound inside the platform scan window, stale `node server.js` command, health gating, clean shutdown, missing-build guidance, fail-closed configuration, platform origin, install-phase build guards, pinned Node runtime |
 
 The browser suite builds the production bundle, starts the compiled server with a fresh PGlite database, launches a real Chromium binary from `@sparticuz/chromium` via `playwright-core`, and does not require an external browser download in this environment.
 

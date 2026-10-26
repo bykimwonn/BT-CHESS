@@ -25,6 +25,16 @@ Build outputs:
 - `dist/web/` — React bundle, GPL Stockfish WASM assets and original piece SVGs.
 - `server/db/migrations/` — SQL migrations (`001_init.sql` and `002_international_modes.sql`) are read from the repository root at runtime. Keep this directory in the runtime image; migration 002 adds jurisdiction policies, currency columns/tables and tournaments.
 
+`postinstall` runs the build automatically (`scripts/build-if-needed.mjs`) after vendoring the engine, so the deployable artifacts exist even when a host keeps its default `npm install` build command. That guard is why a deploy cannot "succeed" with nothing compiled:
+
+- artifacts already present → no-op;
+- application sources not present yet (Docker dependency layer) → no-op;
+- `ROOKSTONE_SKIP_BUILD=1` → no-op, for hosts that run an explicit build;
+- dev toolchain missing (a `--omit=dev` install) → warns with the exact command instead of failing the install;
+- a genuine compile error → fails the build, because shipping code that does not compile only moves the failure to production.
+
+Forcing a rebuild: `ROOKSTONE_FORCE_BUILD=1 npm ci`.
+
 Startup automatically runs checksummed migrations, recovers idle clocks, performs a Stockfish UCI health check, settles any unfinished funded games, and starts maintenance timers. Verify `/api/status` reports `ledgerBaseCurrency: "USD"` and the intended mode after deployment.
 
 ## Environment
@@ -95,7 +105,7 @@ Checklist for any host:
 
 | Setting | Value |
 | --- | --- |
-| Build command | `npm ci --include=dev && npm run build` |
+| Build command | `npm ci --include=dev && npm run build` (optional: `postinstall` builds anyway) |
 | Start command | `npm start` (or, if the dashboard is stale, `node server.js`) |
 | Health check path | `/api/health` |
 | Node version | `22.22.3` |
@@ -105,6 +115,8 @@ Checklist for any host:
 ## Render
 
 `render.yaml` defines a Node web service with `npm ci --include=dev && npm run build`, `npm start`, `NODE_VERSION=22.22.3`, health check `/api/health`, and a managed PostgreSQL database.
+
+If the dashboard still holds Render's default `npm install`, the deploy now still works: `postinstall` compiles the application during install. The build log will show `[rookstone] Compiling the application during install (npm run build)` followed by `Automatic build complete`. If the log shows `Cannot find module dist-server/server/index.js` and no such lines, the install was run with `--omit=dev`; set the Build Command explicitly.
 
 Required secrets you must set in the Render dashboard: `DATABASE_URL` (from the managed database, or the blueprint's `fromDatabase` reference) and `SESSION_SECRET` (at least 32 random characters, `openssl rand -hex 32`). Optional: `SMTP_URL` and `EMAIL_FROM` for verification/reset email.
 

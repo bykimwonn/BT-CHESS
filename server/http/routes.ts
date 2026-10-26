@@ -19,6 +19,7 @@ import { validFen } from '../games/rules.js';
 import type { GameEvents } from '../games/service.js';
 import { ProviderError } from '../payments/types.js';
 import { createLogger } from '../services/logger.js';
+import { verificationEmail } from '../services/email-templates.js';
 const errorLog = createLogger();
 import type { ProviderId } from '../payments/types.js';
 
@@ -73,6 +74,12 @@ export function createApiRouter(ctx: AppContext): Router {
   });
   const analysisLimiter = rateLimit({
     windowMs: 60_000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false,
+  });
+  // A compromised administrator session must not be able to use the platform as
+  // a bulk mail sender.
+  const emailTestLimiter = rateLimit({
+    windowMs: 15 * 60_000, limit: 10, standardHeaders: 'draft-7', legacyHeaders: false,
+    message: { error: { code: 'rate_limited', message: 'Too many test emails requested' } },
   });
   router.use(globalLimiter);
 
@@ -240,11 +247,17 @@ export function createApiRouter(ctx: AppContext): Router {
   }));
   router.post('/auth/email-verification/send', protectedRoute, wrap(async (req, res) => {
     const u = user(req);
-    if (!ctx.mailer.configured) throw new AppError(503, 'email_unavailable', 'SMTP_URL is not configured; verification email cannot be delivered');
+    if (!ctx.mailer.configured) {
+      const status = ctx.mailer.status();
+      throw new AppError(503, 'email_unavailable',
+        `Email delivery is not configured: ${status.problems.join('; ') || 'SMTP is not configured'}`);
+    }
     const { token, email } = await ctx.auth.createOneTimeToken(u.id, 'email_verify');
-    const delivery = await ctx.mailer.send(email, 'Verify your Rookstone Arena email',
-      `${env.publicOrigin}/verify-email?token=${token}`);
-    res.json({ delivered: delivery.delivered });
+    const delivery = await ctx.mailer.sendContent(
+      email,
+      verificationEmail(`${env.publicOrigin}/verify-email?token=${encodeURIComponent(token)}`),
+    );
+    res.json({ delivered: delivery.delivered, reason: delivery.reason });
   }));
 
   // ----------------------------------------------------------- public chess
@@ -683,6 +696,11 @@ export function createApiRouter(ctx: AppContext): Router {
   router.get('/admin/withdrawals', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.admin.withdrawals() })));
   router.get('/admin/provider-events', adminRoute, wrap(async (_req, res) => res.json({ items: await ctx.admin.providerEvents() })));
   router.get('/admin/providers', adminRoute, wrap(async (_req, res) => res.json({ providers: ctx.payments.health(), docs: ctx.payments.docs() })));
+  router.get('/admin/email', adminRoute, wrap(async (_req, res) => res.json(await ctx.admin.emailStatus())));
+  router.post('/admin/email/test', adminRoute, emailTestLimiter, wrap(async (req, res) => {
+    const input = adminActionSchema.extend({ to: emailSchema }).parse(req.body);
+    res.json(await ctx.admin.sendTestEmail(user(req).id, input.to, input.reason));
+  }));
   router.get('/admin/system-health', adminRoute, wrap(async (_req, res) => res.json(await ctx.admin.systemHealth())));
   router.get('/admin/security-events', adminRoute, wrap(async (req, res) => res.json({ items: await ctx.admin.securityEvents(intParam(req.query.limit, 100, 500)) })));
   router.get('/admin/audit-logs', adminRoute, wrap(async (req, res) => res.json({ items: await ctx.admin.auditLogs(intParam(req.query.limit, 100, 500)) })));

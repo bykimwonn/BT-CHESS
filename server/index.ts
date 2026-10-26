@@ -124,6 +124,14 @@ async function main(): Promise<void> {
     const migrations = await runMigrations(db);
     ctx = createContext(db, log);
 
+    const emailStatus = ctx.mailer.status();
+    if (!emailStatus.configured) {
+      log.warn(
+        { provider: emailStatus.provider, problems: emailStatus.problems },
+        'email delivery is not configured; email verification and password reset will not be delivered',
+      );
+    }
+
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', env.trustProxy);
@@ -235,6 +243,7 @@ async function main(): Promise<void> {
       settlementRecovery,
       engineHealth,
       mode: ctx.compliance.testMode ? 'test' : ctx.compliance.realMoneyEnabled ? 'real' : 'free',
+      email: { configured: emailStatus.configured, provider: emailStatus.provider, host: emailStatus.host, from: emailStatus.from },
       database: db.driver,
       publicOrigin: env.publicOrigin,
       publicOriginSource: env.publicOriginSource,

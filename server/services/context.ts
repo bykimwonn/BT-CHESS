@@ -52,7 +52,7 @@ export function createContext(db: Database, log: AppLogger = createLogger()): Ap
   const payments = new PaymentService(db, ledger, auth, eligibility, compliance, adapters, log);
   const engine = new EngineService(log);
   const analysis = new AnalysisService(db, games, engine, log);
-  const admin = new AdminService(db, compliance, config, auth, games, ledger, settlement, payments, engine, analysis, log);
+  const admin = new AdminService(db, compliance, config, auth, games, ledger, settlement, payments, engine, analysis, mailer, log);
   return {
     db, log, compliance, config, mailer, eligibility, auth, ledger, settlement, games,
     competition, tournaments, payments, engine, analysis, admin, realtime: null,

@@ -9,6 +9,7 @@ import { sessionSecret } from '../services/secrets.js';
 import type { LedgerService } from '../finance/ledger.js';
 import type { Mailer } from '../services/mailer.js';
 import type { AppLogger } from '../services/logger.js';
+import { newSignInEmail, passwordResetEmail, verificationEmail } from '../services/email-templates.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { generateTotpSecret, verifyTotp, encryptTotpSecret, decryptTotpSecret, otpauthUrl } from './totp.js';
 import { createSession, findSession, ipHashFromRequest, parseCookies, revokeSession, type AuthUser } from './session.js';
@@ -86,8 +87,10 @@ export class AuthService {
         body: 'Your account is ready. Verify your email to enable password recovery.', link: '/settings',
       });
     });
-    const delivery = await this.mailer.send(data.email, 'Verify your Rookstone Arena email',
-      `Open this link to verify your email: ${env.publicOrigin}/verify-email?token=${token}\n\nIf you did not register, ignore this message.`);
+    const delivery = await this.mailer.sendContent(
+      data.email,
+      verificationEmail(`${env.publicOrigin}/verify-email?token=${encodeURIComponent(token)}`),
+    );
     const session = await createSession(this.db, userId, req, res);
     await this.db.query(
       `INSERT INTO security_events (user_id, kind, ip_hash, user_agent, detail)
@@ -154,8 +157,7 @@ export class AuthService {
       [row.id, ipHash],
     );
     if (!prior.rows.length && this.mailer.configured) {
-      await this.mailer.send(data.email, 'New sign-in to Rookstone Arena',
-        `A new device or network signed in to your account at ${new Date().toISOString()}. If this was not you, reset your password and revoke sessions immediately.`);
+      await this.mailer.sendContent(data.email, newSignInEmail(new Date().toISOString()));
     }
     return { user: await this.publicUser(String(row.id)), csrfToken: session.csrfToken };
   }
@@ -208,8 +210,10 @@ export class AuthService {
     // Do not disclose whether the address exists.
     if (!result.rows.length) return { delivered: true };
     const { token, email: address } = await this.createOneTimeToken(String(result.rows[0].id), 'password_reset');
-    const delivery = await this.mailer.send(address, 'Reset your Rookstone Arena password',
-      `Open this link within one hour to choose a new password: ${env.publicOrigin}/reset-password?token=${token}`);
+    const delivery = await this.mailer.sendContent(
+      address,
+      passwordResetEmail(`${env.publicOrigin}/reset-password?token=${encodeURIComponent(token)}`),
+    );
     return {
       delivered: delivery.delivered, reason: delivery.reason,
       devResetToken: env.isProduction ? undefined : token,

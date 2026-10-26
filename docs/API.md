@@ -53,7 +53,7 @@ Validation failures (`400`, code `validation_error`) also include the problem pe
 
 ## Administrator
 
-`/admin/overview`, `/admin/users`, `/admin/users/:id/status`, `/admin/games`, `/admin/games/:id`, `/admin/disputes`, `/admin/disputes/:id/resolve`, `/admin/fair-play/:gameId/review`, `/admin/reviews`, `/admin/reviews/:id/close`, `/admin/ledger`, `/admin/reconciliation`, `/admin/commission`, `/admin/settlements`, `/admin/settlements/reconcile`, `/admin/deposits`, `/admin/withdrawals`, `/admin/provider-events`, `/admin/providers`, `/admin/system-health`, `/admin/security-events`, `/admin/audit-logs`, `/admin/actions`, `/admin/compliance`, `/admin/config`, `/admin/config/commission`, `/admin/responsible-play`.
+`/admin/overview`, `/admin/users`, `/admin/users/:id/status`, `/admin/games`, `/admin/games/:id`, `/admin/disputes`, `/admin/disputes/:id/resolve`, `/admin/fair-play/:gameId/review`, `/admin/reviews`, `/admin/reviews/:id/close`, `/admin/ledger`, `/admin/reconciliation`, `/admin/commission`, `/admin/settlements`, `/admin/settlements/reconcile`, `/admin/deposits`, `/admin/withdrawals`, `/admin/provider-events`, `/admin/providers`, `/admin/email`, `/admin/email/test`, `/admin/system-health`, `/admin/security-events`, `/admin/audit-logs`, `/admin/actions`, `/admin/compliance`, `/admin/config`, `/admin/config/commission`, `/admin/responsible-play`.
 
 High-impact admin POSTs require `{ confirm: true, reason: "..." }` and are recorded in `admin_actions` and `audit_events`.
 

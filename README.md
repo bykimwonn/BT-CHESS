@@ -65,11 +65,20 @@ npm run build
 npm test
 ```
 
+Go-live checks (configuration, optional live SMTP handshake, optional database checks):
+
+```bash
+npm run preflight
+npm run preflight -- --smtp
+npm run preflight -- --smtp --db
+npm run email:test -- you@gmail.com
+```
+
 `npm test` executes:
 
 | Suite | Command | Coverage |
 | --- | --- | --- |
-| Unit | `npm run test:unit` | money math, chess rules, country/timezone helpers, tournament pairing, Paynow hashes, TOTP, PesePay crypto, settlement math, compliance signing |
+| Unit | `npm run test:unit` | money math, chess rules, country/timezone helpers, tournament pairing, Paynow hashes, TOTP, PesePay crypto, settlement math, compliance signing, email transport/preflight rules |
 | Integration | `npm run test:integration` | migrations, ledger/currency invariants, auth/CSRF/RBAC/MFA, games, clocks, settlement, disputes, jurisdiction policies, payment failures, tournaments, terms |
 | UI | `npm run test:ui` | React component tests in jsdom, keyboard board, promotion, theme, dialogs, quote disclosure |
 | Server E2E | `npm run test:e2e` | two authenticated Socket.IO clients, duplicate/stale moves, PGN, ratings, wallet, persistence across restart |
@@ -133,6 +142,8 @@ All adapters are unconfigured until credentials and merchant approval are suppli
 - [Deployment](docs/DEPLOYMENT.md)
 - [Operations](docs/OPERATIONS.md)
 - [Payments](docs/PAYMENTS.md)
+- [Email delivery](docs/EMAIL.md)
+- [Turning on real money](docs/GO-LIVE.md)
 - [Compliance & activation](docs/COMPLIANCE.md)
 - [Security](docs/SECURITY.md)
 - [Testing](docs/TESTING.md)
@@ -150,8 +161,9 @@ All adapters are unconfigured until credentials and merchant approval are suppli
 
 ## Important limitations
 
-- No real-money launch is authorised by this repository. Legal opinion, licence, provider approval, 18+ verification, AML/KYC, tax/withholding treatment and a signed activation manifest are outstanding.
-- SMTP must be configured for production email delivery. The server never pretends an undelivered email was sent.
+- No real-money launch is authorised by this repository. Legal opinion, licence, provider approval, 18+ verification, AML/KYC, tax/withholding treatment and a signed activation manifest are outstanding. [docs/GO-LIVE.md](docs/GO-LIVE.md) lists every step and the exact blockers; `npm run preflight` reports the current state.
+- Real-money deposits need a payout path. Paynow and PesePay do not publish merchant payout APIs for this integration, so withdrawals require approved EcoCash EPG credentials or another approved disbursement provider.
+- SMTP must be configured for production email delivery (Gmail needs an App Password). The server never pretends an undelivered email was sent. See [docs/EMAIL.md](docs/EMAIL.md).
 - MFA is available for every account and required for privileged admin controls in production; enforce it for all administrators before launch.
 - Provider sandbox credentials must never be used in real-money mode. Sandbox credits are test credits only.
 - Engine similarity creates a review signal; it never triggers an automatic ban, confiscation or rating penalty.

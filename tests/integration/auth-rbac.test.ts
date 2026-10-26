@@ -33,6 +33,25 @@ test('registration, sessions, CSRF and role-based admin access', async (t) => {
   const adminOverview = await adminClient.get('/api/admin/overview');
   assert.equal(adminOverview.status, 200, JSON.stringify(adminOverview.body));
   assert.equal(typeof adminOverview.body.users, 'number');
+
+  // Email diagnostics are administrator-only, and a test send never claims
+  // delivery when SMTP is not configured.
+  const playerEmail = await player.get('/api/admin/email');
+  assert.equal(playerEmail.status, 403);
+  const emailStatus = await adminClient.get('/api/admin/email');
+  assert.equal(emailStatus.status, 200, JSON.stringify(emailStatus.body));
+  assert.equal(emailStatus.body.configured, false);
+  assert.ok(Array.isArray(emailStatus.body.problems) && emailStatus.body.problems.length > 0);
+  const testSend = await adminClient.post('/api/admin/email/test', {
+    to: 'ops@example.com', confirm: true, reason: 'verify smtp configuration',
+  });
+  assert.equal(testSend.status, 200, JSON.stringify(testSend.body));
+  assert.equal(testSend.body.delivered, false);
+  assert.match(String(testSend.body.reason), /not configured|configuration/i);
+  const audited = await harness.ctx.db.query<{ action: string }>(
+    "SELECT action FROM admin_actions WHERE action = 'email.test'",
+  );
+  assert.equal(audited.rows.length, 1);
 });
 
 test('TOTP MFA setup, enable, login challenge and disable are enforced', async (t) => {

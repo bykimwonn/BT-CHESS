@@ -76,13 +76,13 @@ export function AuthPage() {
           timezone: browserTimeZone(), timezoneShared,
           accountCurrency: 'USD',
         });
-        toast.success('Account created', result.emailVerified ? 'Your email is verified.' : 'Verify your email from Settings when SMTP is configured.');
+        toast.success('Account created', result.emailVerified ? 'Your email is verified.' : 'Check your inbox and verify your email from Settings.');
         navigate(next, { replace: true });
       } else if (mode === 'forgot') {
         const result = await api<{ delivered: boolean; devResetToken?: string; reason?: string }>('/auth/forgot', { method: 'POST', body: { email } });
         setNotice(result.delivered
           ? 'If an account exists for that address, a password reset link has been sent.'
-          : `Password reset email cannot be delivered: ${result.reason ?? 'SMTP is not configured'}.`);
+          : `Password reset email cannot be delivered: ${result.reason ?? 'email delivery is not configured'}.`);
         if (result.devResetToken) setDevToken(result.devResetToken);
       } else if (mode === 'reset') {
         await api('/auth/reset', { method: 'POST', body: { token, password } });
@@ -217,7 +217,7 @@ export function AuthPage() {
           {notice && <div className="alert alert-success">{notice}</div>}
           {devToken && (
             <div className="alert alert-warning">
-              <strong>Local development token.</strong> SMTP is not configured, so no email was sent. This token is shown only in development:
+              <strong>Local development token.</strong> Email delivery is not configured, so no message was sent. This token is shown only in development:
               <div className="mono small" style={{ overflowWrap: 'anywhere' }}>{devToken}</div>
               <Link to={`/auth?mode=reset&token=${encodeURIComponent(devToken)}`}>Use this reset token</Link>
             </div>

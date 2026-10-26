@@ -35,7 +35,13 @@ export function HelpPage() {
             <div><h3>Practice</h3><ul className="small soft"><li>Practice games are offline and unrated; they never touch the wallet or the leaderboard.</li><li>Strength is an anchor for choosing an opponent, not a rating claim.</li><li>Takeback, Hint and Review last move are coaching tools, not part of a rated game.</li></ul>
               <h3>Clocks</h3><ul className="small soft"><li>Presets: bullet 1+1, blitz 3+2, rapid 10+5, classical 30+10.</li><li>Custom games allow 30 seconds to 120 minutes with 0–60 second increment.</li><li>Increment is added when the move is accepted by the server.</li></ul>
               <h3>Terminal results</h3><ul className="small soft"><li>Checkmate, stalemate and insufficient material are automatic.</li><li>Threefold repetition and the fifty-move rule require a claim.</li><li>Timeout gives the opponent a win unless they lack mating material.</li></ul></div>
-            <div><h3>Integrity</h3><ul className="small soft"><li>Every move carries a unique client nonce and expected state version.</li><li>Stale versions, duplicate nonces, out-of-turn moves and illegal moves are rejected.</li><li>Ratings and statistics are updated only from persisted finished games.</li></ul>
+            <div><h3>Ratings (FIDE rules)</h3><ul className="small soft">
+                <li>Ratings use the FIDE Rating Regulations (Handbook B.02): K = 40 until 30 rated games, K = 20 under 2400, K = 10 once a published rating has reached 2400.</li>
+                <li>Juniors keep K = 40 below 2300 until the end of the year of their 18th birthday, when a year of birth is on file.</li>
+                <li>A gap over 400 points counts as 400 below 2650; from 2650 the true gap is used. K × games per month is capped at 700.</li>
+                <li>Changes round to the nearest whole point (.5 away from zero). The lowest rating is 1400 and new accounts start at 1500.</li>
+              </ul>
+              <h3>Integrity</h3><ul className="small soft"><li>Every move carries a unique client nonce and expected state version.</li><li>Stale versions, duplicate nonces, out-of-turn moves and illegal moves are rejected.</li><li>Ratings and statistics are updated only from persisted finished games.</li></ul>
               <h3>Disputes</h3><ul className="small soft"><li>Open a dispute from a game. Unresolved disputes block settlement.</li><li>Administrators can reject, keep under review, or void with an audited compensating correction.</li><li>No client can submit a custom winner or result.</li></ul></div>
           </div>
         </section>

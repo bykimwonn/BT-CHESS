@@ -4,6 +4,23 @@
 
 The browser is an untrusted presentation layer. It can request moves, challenges, deposits and withdrawals, but it cannot assert a balance, clock, result, rating or settlement. Every state transition is validated and committed by the server.
 
+## Ratings
+
+`shared/rating.ts` is the single implementation of the FIDE Rating Regulations
+(Handbook B.02, in force from 1 March 2024, with the 400-point amendment of
+1 October 2025): the K-factor brackets (40 while new and until 30 games, 20
+under 2400, 10 once a published rating has reached 2400, 40 for juniors under
+2300 until the year of their 18th birthday), the 400-point difference cap below
+2650, the K × n ≤ 700 ceiling per calendar month, rounding to the nearest point
+with .5 away from zero, and the 1400 floor.
+
+`GameService.updateRatings` runs inside the same transaction that finishes the
+game. It reads each seat's rating, games played, peak rating and optional year
+of birth, counts the games already finished that month, applies
+`fideRatingChange` and writes both the new rating and a `rating_history` row
+whose `reason` records the K-factor (`game:white:k40`). `profiles.peak_rating`
+is what makes K = 10 permanent after a player has once reached 2400.
+
 ```
 Browser (React/Vite)
   │ HTTPS JSON + Socket.IO

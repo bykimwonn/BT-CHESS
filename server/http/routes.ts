@@ -40,6 +40,8 @@ const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(48).optional(),
   bio: z.string().trim().max(500).optional(),
   avatarUrl: z.string().trim().url().max(300).nullable().optional(),
+  /** Optional year of birth; only used for FIDE's junior K = 40 rule. */
+  birthYear: z.number().int().min(1900).max(new Date().getUTCFullYear()).nullable().optional(),
 });
 const notificationReadSchema = z.object({ id: z.string().uuid() });
 const disputeSchema = z.object({ reason: z.string().trim().min(8).max(200), detail: z.string().trim().max(2000).default('') });
@@ -412,7 +414,7 @@ export function createApiRouter(ctx: AppContext): Router {
     const input = updateProfileSchema.parse(req.body);
     const fields: string[] = [];
     const params: unknown[] = [user(req).id];
-    for (const [key, column] of [['displayName', 'display_name'], ['bio', 'bio'], ['avatarUrl', 'avatar_url']] as const) {
+    for (const [key, column] of [['displayName', 'display_name'], ['bio', 'bio'], ['avatarUrl', 'avatar_url'], ['birthYear', 'birth_year']] as const) {
       if (input[key] !== undefined) { params.push(input[key]); fields.push(`${column} = $${params.length}`); }
     }
     if (!fields.length) throw badRequest('No profile fields supplied');

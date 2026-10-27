@@ -13,6 +13,7 @@ import {
   START_FEN, allLegalUci, applyMove, claimToTermination, claimableDraw,
   makeChess, pgnWithHeaders, replayMoves, resultForWinner, terminalAfterMove,
 } from './rules.js';
+import { fideRatingChange } from '../../shared/rating.js';
 
 export interface PresenceTracker { isConnected(userId: string): boolean }
 
@@ -164,7 +165,7 @@ export class GameService {
       const shared = Boolean(row?.country_shared);
       const timezoneShared = Boolean(row?.timezone_shared);
       return {
-        userId: id, username: String(row?.username ?? 'Unknown'), rating: Number(row?.rating ?? 1200),
+        userId: id, username: String(row?.username ?? 'Unknown'), rating: Number(row?.rating ?? 1500),
         connected: this.presence.isConnected(id),
         country: shared ? String(row?.country ?? 'ZZ') : undefined,
         countryShared: shared,
@@ -455,7 +456,7 @@ export class GameService {
 
   private async updateRatings(tx: Queryable, game: GameRow, result: GameResult): Promise<void> {
     const profiles = await tx.query<Row>(
-      'SELECT user_id, rating, games_played, wins, losses, draws FROM profiles WHERE user_id IN ($1,$2)',
+      'SELECT user_id, rating, games_played, peak_rating, birth_year FROM profiles WHERE user_id IN ($1,$2)',
       [game.white_id, game.black_id],
     );
     const white = profiles.rows.find((r) => String(r.user_id) === String(game.white_id));
@@ -463,17 +464,43 @@ export class GameService {
     if (!white || !black) return;
     const whiteRating = Number(white.rating), blackRating = Number(black.rating);
     const whiteScore = result === 'white' ? 1 : result === 'black' ? 0 : 0.5;
-    const expected = 1 / (1 + 10 ** ((blackRating - whiteRating) / 400));
-    const kWhite = Number(white.games_played) < 20 ? 40 : 20;
-    const kBlack = Number(black.games_played) < 20 ? 40 : 20;
-    const whiteDelta = Math.round(kWhite * (whiteScore - expected));
-    const blackDelta = Math.round(kBlack * ((1 - whiteScore) - (1 - expected)));
-    for (const [row, delta, score] of [[white, whiteDelta, whiteScore], [black, blackDelta, 1 - whiteScore]] as const) {
+    // FIDE limits K × n to 700 per rating period; here the period is the
+    // calendar month, so count the games already finished in this one.
+    const periods = await tx.query<Row>(
+      `SELECT user_id, COUNT(*)::int AS n FROM (
+         SELECT white_id AS user_id FROM games
+          WHERE status = 'finished' AND id <> $2 AND white_id = ANY($1)
+            AND ended_at >= date_trunc('month', now())
+         UNION ALL
+         SELECT black_id FROM games
+          WHERE status = 'finished' AND id <> $2 AND black_id = ANY($1)
+            AND ended_at >= date_trunc('month', now())
+       ) period_games GROUP BY user_id`,
+      [[String(game.white_id), String(game.black_id)], game.id],
+    );
+    const gamesThisPeriod = (userId: string) => Number(
+      periods.rows.find((r) => String(r.user_id) === userId)?.n ?? 0,
+    );
+    const state = (row: Row) => ({
+      rating: Number(row.rating),
+      ratedGames: Number(row.games_played),
+      peakRating: Number(row.peak_rating ?? row.rating),
+      birthYear: row.birth_year === null || row.birth_year === undefined ? null : Number(row.birth_year),
+      gamesThisPeriod: gamesThisPeriod(String(row.user_id)),
+    });
+    const whiteChange = fideRatingChange(state(white), blackRating, whiteScore);
+    const blackChange = fideRatingChange(state(black), whiteRating, 1 - whiteScore);
+    const games = [
+      [white, whiteChange, whiteScore],
+      [black, blackChange, 1 - whiteScore],
+    ] as const;
+    for (const [row, change, score] of games) {
       const userId = String(row.user_id);
       const before = Number(row.rating);
-      const after = Math.max(100, before + delta);
+      const after = change.ratingAfter;
       await tx.query(
-        `UPDATE profiles SET rating = $2, games_played = games_played + 1,
+        `UPDATE profiles SET rating = $2, peak_rating = GREATEST(peak_rating, $2),
+           games_played = games_played + 1,
            wins = wins + CASE WHEN $3::numeric = 1 THEN 1 ELSE 0 END,
            losses = losses + CASE WHEN $3::numeric = 0 THEN 1 ELSE 0 END,
            draws = draws + CASE WHEN $3::numeric = 0.5 THEN 1 ELSE 0 END,
@@ -483,7 +510,7 @@ export class GameService {
       await tx.query(
         `INSERT INTO rating_history (user_id, game_id, rating_before, rating_after, delta, reason)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [userId, game.id, before, after, after - before, `game:${result}`],
+        [userId, game.id, before, after, after - before, `game:${result}:k${change.k}`],
       );
       const favourite = await tx.query<Row>(`
         SELECT time_control->>'category' AS category, COUNT(*) AS n

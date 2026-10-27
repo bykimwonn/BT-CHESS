@@ -27,17 +27,17 @@ npm run test:deploy
 
 | Suite | Runner / result | Count |
 | --- | --- | --- |
-| Unit | `tsx --test tests/unit/*.test.ts` — 78 pass, 0 fail | 78 tests |
-| Integration | `tsx --test tests/integration/*.test.ts` — 27 pass, 0 fail | 27 tests |
+| Unit | `tsx --test tests/unit/*.test.ts` — 87 pass, 0 fail | 87 tests |
+| Integration | `tsx --test tests/integration/*.test.ts` — 30 pass, 0 fail | 30 tests |
 | UI | `vitest run --config vitest.config.ts` — 9 files, 30 pass, 0 fail | 30 tests |
 | Server E2E | `tsx tests/e2e.ts` — `ok: true` | 21 checks |
-| Browser | real Chromium + production bundle — `ok: true` | 52 checks |
+| Browser | real Chromium + production bundle — `ok: true` | 56 checks |
 | Deployment | `node tests/deploy-entrypoint.mjs` — passes | 8 checks |
 | Typecheck | `tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json` | 0 errors |
 | Production build | TypeScript server + Vite web bundle | 0 errors |
 | Clean install | `npm ci` in a fresh copy of the repository | exit 0; postinstall vendored GPL Stockfish assets |
 
-Combined: **135 automated test cases**, **81 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
+Combined: **147 automated test cases**, **85 end-to-end/browser/deployment assertions**, with **0 failures** in the final run.
 
 The deployment suite runs the exact stale host command `node server.js` against the compiled server and asserts the port opens in well under the 60-second platform scan window (observed: 362 ms bound, 3.1 s ready), that `/api/health` is 200 only when ready and reports its database driver, and that `SIGTERM` shuts down cleanly. It asserts incomplete production configuration keeps the port bound and returns 503 listing every missing setting instead of crash-looping, that `RENDER_EXTERNAL_URL` supplies the public origin when `PUBLIC_ORIGIN` is unset, that a missing build exits 1 with actionable guidance and performs no runtime build, that the install-phase build exists, is idempotent, can be skipped, never breaks a production-only install and is copied into Docker's dependency layer; and that `engines`, `.node-version`, `render.yaml` and `start` stay pinned to the verified runtime.
 
@@ -82,6 +82,8 @@ The deployment suite runs the exact stale host command `node server.js` against 
 - Registration form shows the specific rule inline (`Include an uppercase letter`), marks the input `aria-invalid`, keeps the form usable, and makes **no** network request for a fixable mistake. Also asserts mobile keyboards get `autocapitalize="none"`, `autocorrect="off"` and `inputmode="email"` so credentials are not silently mangled.
 
 - Keyboard algebraic move input and promotion picker on the real `react-chessboard` component.
+- FIDE ratings: the pure functions are tested against the regulations — the K brackets (new until 30 games, 20 under 2400, 10 after a published 2400), the junior rule, the 400-point cap with its 2650 exception, .5-away-from-zero rounding, the K × n ≤ 700 monthly ceiling and the 1400 floor. Integration tests resign real games and assert the stored rating, `peak_rating`, `rating_history` delta and the recorded K-factor; the browser run resigns an online game and asserts both name plates move from 1500 to 1520/1480 in the UI.
+- Uncluttered board screen: the browser journey asserts the live game carries the two name plates with the viewer's own marked, that each shows a FIDE rating, and that no engine-analysis control, `server-authoritative clocks` string, `Position strings` details or `Version n` counter is rendered.
 - Board studio: `/boards` renders the real board with five palettes and six piece sets; selecting one repaints the board, marks the choice with `aria-pressed`, persists it to the browser preference store and survives a reload. Legacy preference ids still migrate (`forest`→`green`, `classic`→`chesscom`); every rendered piece, including the promotion picker and captured-piece tray, comes from the selected set's folder.
 - A mocked UCI Web Worker verifies the browser Stockfish handshake, `bestmove` parsing and worker shutdown.
 - Theme persistence/toggle, board preference updates, accessible modal/Escape behaviour, explicit confirmation dialogs, and exact quote disclosure.

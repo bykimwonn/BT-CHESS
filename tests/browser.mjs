@@ -257,10 +257,19 @@ async function run() {
     const gameId = pageB.url().split('/game/')[1].split(/[?#]/)[0];
     check('challenge acceptance opened a live game for both users', pageA.url().includes(`/game/${gameId}`) && pageB.url().includes(`/game/${gameId}`));
 
-    const whiteStripA = await pageA.locator('.player-strip').filter({ hasText: 'White ·' }).first().innerText();
-    const whitePage = whiteStripA.includes(userA) ? pageA : pageB;
+    const whitePlateA = await pageA.locator('.player-bar[data-side="white"]').innerText();
+    const whitePage = whitePlateA.includes(userA) ? pageA : pageB;
     const blackPage = whitePage === pageA ? pageB : pageA;
-    check('server-assigned colours are visible to both players', whiteStripA.includes(userA) || whiteStripA.includes(userB));
+    check('server-assigned colours are visible to both players', whitePlateA.includes(userA) || whitePlateA.includes(userB));
+    const blackPlate = await whitePage.locator('.player-bar[data-side="black"]').innerText();
+    const whitePlate = await whitePage.locator('.player-bar[data-side="white"]').innerText();
+    const whiteName = whitePage === pageA ? userA : userB;
+    const blackName = whitePage === pageA ? userB : userA;
+    check('each player\'s name and FIDE rating sit beside the board',
+      whitePlate.includes(whiteName) && blackPlate.includes(blackName)
+      && /\b1[4-9]\d\d\b/.test(whitePlate) && /\b1[4-9]\d\d\b/.test(blackPlate)
+      && (await whitePage.locator('.player-bar[data-side="white"] .player-you').count()) === 1,
+      { whitePlate, blackPlate });
 
     await playMove(whitePage, 'e2', 'e4');
     await blackPage.locator('.move-list').getByText('e4', { exact: true }).waitFor({ timeout: 15_000 });
@@ -283,6 +292,14 @@ async function run() {
     const pgn = await whitePage.locator('textarea[aria-label="Portable Game Notation"]').inputValue();
     const fen = await whitePage.locator('input[aria-label="Forsyth-Edwards Notation"]').inputValue();
     check('SAN/PGN/FEN are available from authoritative game state', pgn.includes('1. e4 e5') && (fen.includes(' w ') || fen.length > 30), { pgn, fen });
+
+    // Declutter check: the live board screen carries the two name plates, the
+    // clocks, the moves and the result — no engine panel, no debug strings.
+    check('playing screen has no engine panel, game-id or version strings',
+      (await whitePage.getByText(/Show engine analysis/i).count()) === 0
+      && (await whitePage.getByText(/server-authoritative clocks/i).count()) === 0
+      && (await whitePage.getByText(/Position strings/i).count()) === 0
+      && (await whitePage.getByText(/^Version \d+$/).count()) === 0);
 
     await whitePage.goto(`${base}/wallet`, { waitUntil: 'domcontentloaded' });
     await whitePage.getByText(/USD \$0\.00/).first().waitFor();
@@ -381,6 +398,10 @@ async function run() {
       check(`no horizontal overflow at 390px on ${route}`, size.scrollWidth <= size.innerWidth + 1, size);
     }
 
+    await pageA.goto(`${base}/game/${gameId}`, { waitUntil: 'domcontentloaded' });
+    const gameSize = await overflow(pageA);
+    check('no horizontal overflow at 390px on the live game screen', gameSize.scrollWidth <= gameSize.innerWidth + 1, gameSize);
+
     // Restart the API process against the same database and verify persistence
     // through the browser session without recreating any data.
     restartInProgress = true;
@@ -404,6 +425,18 @@ async function run() {
     await blackPage.locator('.move-list').getByText('Nf3', { exact: true }).waitFor({ timeout: 20_000 });
     const postRestartMoves = await blackPage.locator('.move-list').innerText();
     check('moves still synchronise over Socket.IO after a real API restart', /Nf3/.test(postRestartMoves), { postRestartMoves });
+
+    // Resigning ends the game for both players, publishes the result and rates
+    // the game with FIDE arithmetic: both are new to the list (K = 40), so a
+    // win between equals is +20 and the loss -20 from the 1500 seed.
+    await blackPage.getByRole('button', { name: 'Resign' }).click();
+    await blackPage.getByRole('dialog', { name: 'Resign this game?' }).getByRole('button', { name: 'Resign' }).click();
+    await whitePage.getByRole('heading', { name: 'White wins', exact: true }).waitFor({ timeout: 20_000 });
+    await blackPage.getByRole('heading', { name: 'White wins', exact: true }).waitFor({ timeout: 20_000 });
+    const winnerPlate = await whitePage.locator('.player-bar[data-side="white"]').innerText();
+    const loserPlate = await whitePage.locator('.player-bar[data-side="black"]').innerText();
+    check('resignation is published to both players with the FIDE rating change (K = 40, +20 / -20)',
+      /\b1520\b/.test(winnerPlate) && /\b1480\b/.test(loserPlate), { winnerPlate, loserPlate });
 
     check('no uncaught browser page errors during the journey', pageErrors.length === 0, pageErrors);
     console.log(JSON.stringify({ ok: true, checks, gameId, port, pageErrors, expectedRestartNoise, restartWindowOpen: restartInProgress }, null, 2));

@@ -141,7 +141,7 @@ export class CompetitionService {
       };
     }
     const c = creator.rows[0];
-    const rating = Number(c?.rating ?? 1200);
+    const rating = Number(c?.rating ?? 1500);
     const range = Number(row.rating_range ?? 300);
     return {
       id: String(row.id), kind: row.kind as ChallengeKind,
@@ -386,8 +386,8 @@ export class CompetitionService {
       const ratings = await tx.query<Row>(
         'SELECT user_id, rating FROM profiles WHERE user_id IN ($1,$2)', [challenge.creator_id, userId],
       );
-      const creatorRating = Number(ratings.rows.find((r) => String(r.user_id) === String(challenge.creator_id))?.rating ?? 1200);
-      const accepterRating = Number(ratings.rows.find((r) => String(r.user_id) === userId)?.rating ?? 1200);
+      const creatorRating = Number(ratings.rows.find((r) => String(r.user_id) === String(challenge.creator_id))?.rating ?? 1500);
+      const accepterRating = Number(ratings.rows.find((r) => String(r.user_id) === userId)?.rating ?? 1500);
       const range = Number(challenge.rating_range ?? 300);
       if (challenge.kind === 'open' && Math.abs(creatorRating - accepterRating) > range) {
         throw forbidden('Your rating is outside this challenge’s range');
@@ -446,7 +446,7 @@ export class CompetitionService {
     await this.assertEligible(userId, data.stakeCents);
     const ticketId = uuid();
     const profile = await this.db.query<Row>('SELECT rating FROM profiles WHERE user_id = $1', [userId]);
-    const rating = Number(profile.rows[0]?.rating ?? 1200);
+    const rating = Number(profile.rows[0]?.rating ?? 1500);
     const expiresAt = new Date(Date.now() + 10 * 60_000);
 
     const outcome = await this.db.transaction(async (tx) => {

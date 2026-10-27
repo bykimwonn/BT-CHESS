@@ -21,7 +21,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('account');
-  const [profile, setProfile] = useState({ displayName: user?.displayName ?? '', bio: '', avatarUrl: '' });
+  const [profile, setProfile] = useState({ displayName: user?.displayName ?? '', bio: '', avatarUrl: '', birthYear: '' });
   const [password, setPassword] = useState({ current: '', next: '', confirm: '' });
   const [mfa, setMfa] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [mfaCode, setMfaCode] = useState('');
@@ -39,6 +39,21 @@ export function SettingsPage() {
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<{ items: Array<Record<string, unknown>> }>('/auth/sessions'), enabled: tab === 'security' });
   const restrictions = useQuery({ queryKey: ['restrictions'], queryFn: () => api<{ items: Array<Record<string, unknown>> }>('/responsible-play/restrictions'), enabled: tab === 'responsible' });
   const eligibility = useQuery({ queryKey: ['me-international'], queryFn: () => api<EligibilityView>('/me/international'), enabled: tab === 'international' });
+  const me = useQuery({
+    queryKey: ['me'],
+    enabled: Boolean(user),
+    queryFn: () => api<{ display_name?: string; bio?: string; avatar_url?: string | null; birth_year?: number | null }>('/me'),
+  });
+
+  useEffect(() => {
+    if (!me.data) return;
+    setProfile({
+      displayName: me.data.display_name ?? '',
+      bio: me.data.bio ?? '',
+      avatarUrl: me.data.avatar_url ?? '',
+      birthYear: me.data.birth_year ? String(me.data.birth_year) : '',
+    });
+  }, [me.data]);
 
   useEffect(() => {
     if (!eligibility.data) return;
@@ -68,7 +83,15 @@ export function SettingsPage() {
   const saveProfile = async () => {
     setBusy(true);
     try {
-      await api('/me', { method: 'PATCH', body: profile });
+      await api('/me', {
+        method: 'PATCH',
+        body: {
+          displayName: profile.displayName,
+          bio: profile.bio,
+          avatarUrl: profile.avatarUrl.trim() ? profile.avatarUrl.trim() : null,
+          birthYear: profile.birthYear.trim() ? Number(profile.birthYear) : null,
+        },
+      });
       await refresh();
       toast.success('Profile updated');
     } catch (error) { toast.error('Could not update profile', errorMessage(error)); }
@@ -161,6 +184,10 @@ export function SettingsPage() {
             <label className="field"><span className="field-label">Display name</span><input className="input" value={profile.displayName} onChange={(e) => setProfile((p) => ({ ...p, displayName: e.target.value }))} maxLength={48} /></label>
             <label className="field"><span className="field-label">Bio</span><textarea className="textarea" value={profile.bio} onChange={(e) => setProfile((p) => ({ ...p, bio: e.target.value }))} maxLength={500} /></label>
             <label className="field"><span className="field-label">Avatar URL (optional)</span><input className="input" type="url" value={profile.avatarUrl} onChange={(e) => setProfile((p) => ({ ...p, avatarUrl: e.target.value }))} placeholder="https://…" /></label>
+            <label className="field"><span className="field-label">Year of birth (optional)</span>
+              <input className="input" inputMode="numeric" maxLength={4} value={profile.birthYear} placeholder="1998"
+                onChange={(e) => setProfile((p) => ({ ...p, birthYear: e.target.value.replace(/\D/g, '').slice(0, 4) }))} />
+              <span className="field-hint">Used only for FIDE's junior coefficient (K = 40 under 2300 until the end of the year of your 18th birthday). Never shown publicly.</span></label>
             <button className="btn btn-primary" onClick={() => void saveProfile()} disabled={busy}>Save profile</button>
           </div>
         </section>
